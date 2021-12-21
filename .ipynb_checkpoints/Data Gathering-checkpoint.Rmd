@@ -1,0 +1,84 @@
+---
+title: "Data Gathering"
+author: "Siddharth Iyer"
+date: "11/14/2021"
+output: pdf_document
+---
+
+```{r}
+library(quantmod)
+
+symbols <- c("XLK", "XLV", "XLY", "XLF", "XLI", "XLP", "XLU", "XLB", "XLE", "XLRE", "XLC")
+getSymbols(symbols, from="2019-01-01", to="2021-11-12")
+
+price_data = data.frame(XLK$XLK.Adjusted, XLV$XLV.Adjusted, XLY$XLY.Adjusted, XLF$XLF.Adjusted,
+                    XLI$XLI.Adjusted, XLP$XLP.Adjusted, XLU$XLU.Adjusted, XLB$XLB.Adjusted,
+                    XLE$XLE.Adjusted,XLC$XLC.Adjusted, XLRE$XLRE.Adjusted)
+colnames(price_data) <- symbols
+price_data
+```
+
+```{r}
+install.packages("TTR")
+library(TTR)
+
+indicator_names <- c("SMA", "CCI", "CMO", "MACD", "BBands", "runPercentRank", "runSum", "fastK", "fastD", "slowD", "TDI", "TRIX", "volatility","WPR","ZigZag")
+
+indicators <- array(0, dim = c(nrow(price_data), length(indicator_names), ncol(price_data)))
+dimnames(indicators)[[3]] <- symbols
+rownames(indicators) <- rownames(price_data)
+colnames(indicators) <- indicator_names
+dimnames(indicators)
+
+for (i in 1:ncol(price_data)){
+indicators[,1,i] = as.vector(SMA(price_data[,i]))
+indicators[,2,i] = as.vector(CCI(price_data[,i]))
+indicators[,3,i] = as.vector(CMO(price_data[,i]))
+indicators[,4,i] = as.vector(MACD(price_data[,i])[,1])
+indicators[,5,i] = as.vector(BBands(price_data[,i])[,4])
+indicators[,6,i] = as.vector(runPercentRank(price_data[,i]))
+indicators[,7,i] = as.vector(runSum(price_data[,i]))
+indicators[,8,i] = as.vector(stoch(price_data[,i])[,1]) #fastK
+indicators[,9,i] = as.vector(stoch(price_data[,i])[,2])      #fastD
+indicators[,10,i] = as.vector(stoch(price_data[,i])[,3])      #slowD
+indicators[,11,i] = as.vector(TDI(price_data[,i])[,1])
+indicators[,12,i] = as.vector(TRIX(price_data[,i])[,1])
+indicators[,13,i] = as.vector(volatility(price_data[,i]))
+indicators[,14,i] = as.vector(WPR(price_data[,i]))
+indicators[,15,i] = as.vector(ZigZag(price_data[,i]))
+
+}
+
+
+View(indicators[,,1])
+View(cor(indicators[,,1], use = "complete.obs"))
+
+```
+```{r}
+
+return_data = data.frame(dailyReturn(XLK$XLK.Adjusted, type = "log"), dailyReturn(XLV$XLV.Adjusted, type = "log"), dailyReturn(XLY$XLY.Adjusted, type = "log"), dailyReturn(XLF$XLF.Adjusted, type = "log"), dailyReturn(XLI$XLI.Adjusted, type = "log"), dailyReturn(XLP$XLP.Adjusted, type = "log"), dailyReturn(XLU$XLU.Adjusted, type = "log"), dailyReturn(XLB$XLB.Adjusted, type = "log"), dailyReturn(XLE$XLE.Adjusted, type = "log"), dailyReturn(XLC$XLC.Adjusted, type = "log"), dailyReturn(XLRE$XLRE.Adjusted, type = "log"))
+
+colnames(return_data) <- symbols
+View(cor(return_data))
+
+
+
+result <- matrix(nrow = 2, ncol= ncol(return_data))
+
+for (i in 1:ncol(return_data)){
+  result[1,i] <- mean(return_data[,i]) 
+  result[2,i] <- sd(return_data[,i])
+}
+
+mean(price_data[,11])
+rownames(result) <- c("Mean", "Standard Deviation")
+colnames(result) <- symbols
+View(result)
+```
+
+
+
+
+
+
+
