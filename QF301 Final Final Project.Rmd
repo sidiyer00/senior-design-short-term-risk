@@ -14,7 +14,6 @@ getSymbols(symbols, from="2018-01-25", to="2021-01-01")
 price_data = data.frame(SPY$SPY.Adjusted,VXX$VXX.Adjusted)
 colnames(price_data) <- symbols
 
-
 ```
 
 ```{r}
