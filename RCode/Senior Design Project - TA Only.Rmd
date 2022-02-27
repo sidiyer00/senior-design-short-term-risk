@@ -1,0 +1,750 @@
+---
+title: "Data Gathering"
+author: "Marc Vitenzon"
+date: "11/14/2021"
+output: pdf_document
+---
+
+```{r}
+library(BatchGetSymbols)
+#Step One: Get Price Data
+
+
+# Data set for SPY only 
+tickers <- "SPY"
+first.date <- as.Date("2018-01-25")-365 # - VXX data starts from 2018-01-25, but to get 1 year percent rank values for stocks and SPY we need to start 252 trading days earlier
+last.date <- "2022-01-01"
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+SPY_data <- data.frame(l.out$df.tickers)
+
+
+# Data set for price of SPY and VIX only
+tickers <- c("SPY", "VXX")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2018-01-25",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Data set including Open, Close, and Volume for both
+complete_data <- data.frame(l.out$df.tickers)
+
+
+
+######## Optional #######################
+# Data set of SPY constituents
+sp500 <- GetSP500Stocks() # constituents vary over time so this is a not a perfect implementation
+tickers <- c(sp500$Tickers)
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+constituents <- l.out$df.tickers
+
+
+```
+
+```{r}
+# Apply the indicators
+
+library(TTR)
+
+# all indicators related to the SPY
+ema_20 = as.numeric(EMA(SPY_data$price.adjusted, n = 20))
+ma_50 = as.numeric(SMA(SPY_data$price.adjusted, n = 50))
+ma_200 = as.numeric(SMA(SPY_data$price.adjusted, n = 200))
+aroon_ = as.numeric(aroon(SPY_data$price.adjusted, n = 20)) # using daily close, HL of day also possible
+chaikinVol = as.numeric(chaikinVolatility(cbind(SPY_data$price.high,SPY_data$price.low), n = 20))
+chaikinMF  = as.numeric(CMF(cbind(SPY_data$price.high,SPY_data$price.low,SPY_data$price.close),SPY_data$volume, n = 20))
+chaikinAD  =  Delt(SMA(as.numeric(chaikinAD(cbind(SPY_data$price.high,SPY_data$price.low,SPY_data$price.close),SPY_data$volume)), 14)) # moving average of chaikin Adv/Dec
+percentRank = as.numeric(runPercentRank(SPY_data$price.adjusted, n = 252))
+RSI_ = as.numeric(RSI(SPY_data$price.adjusted, n = 20))
+runningVar_EMA = EMA(as.numeric(runVar(SPY_data$price.adjusted, n = 20)),10)
+runningVar_MA = SMA(as.numeric(runVar(SPY_data$price.adjusted, n = 20)),30)
+                     
+
+indicator_df = cbind(
+  ema_20,
+  ma_50,
+  ma_200,
+  aroon_,
+  chaikinVol,
+  chaikinMF,
+  chaikinAD,
+  percentRank,
+  RSI_,
+  runningVar_EMA,
+  runningVar_MA
+)
+
+indicator_df <- data.frame(indicator_df)
+indicator_df <- indicator_df[1:length(SPY_data$price.open),]
+indicator_df <- cbind(indicator_df, SPY_data$price.adjusted,as.Date(SPY_data$ref.date))
+indicator_df = indicator_df[complete.cases(indicator_df), ]
+
+library(corrplot)
+
+corrplot(cor(indicator_df[,1:11], use = "complete.obs"), method = "number")
+
+
+```
+```{r}
+# Apply the scoring system:
+
+scores <- data.frame(matrix(nrow = nrow(indicator_df), ncol = 16))
+colnames(scores) <- c("20_EMA", "50_SMA", "200_SMA", "20MA_vs_50_MA", "50MA_vs_200MA", "20MA_vs_200MA", "Aroon", "Chaikin Volatility", "Chaikin Money Flow", "Chaikin Advance/Decline", "RSI", "Percent Rank", "runVar", "Value", "Label" , "Date")
+
+
+
+## Moving Average Scoring
+# 20 EMA 
+scores$`20_EMA`[indicator_df$`SPY_data$price.adjusted` >= indicator_df$ema_20] <- 5
+scores$`20_EMA`[indicator_df$`SPY_data$price.adjusted` < indicator_df$ema_20] <- -5
+
+# 50 SMA
+scores$`50_SMA`[indicator_df$`SPY_data$price.adjusted` >= indicator_df$ma_50] <- 10
+scores$`50_SMA`[indicator_df$`SPY_data$price.adjusted` < indicator_df$ma_50] <- -10
+
+# 200 SMA
+scores$`200_SMA`[indicator_df$`SPY_data$price.adjusted` >= indicator_df$ma_200] <- 20
+scores$`200_SMA`[indicator_df$`SPY_data$price.adjusted` < indicator_df$ma_200] <- -20
+
+# 20 vs 50
+scores$`20MA_vs_50_MA`[indicator_df$ema_20 >= indicator_df$ma_50] <- 10
+scores$`20MA_vs_50_MA`[indicator_df$ema_20 < indicator_df$ma_50] <- -10
+
+# 50 vs 200
+scores$`50MA_vs_200MA`[indicator_df$ma_200 >= indicator_df$ma_50] <- -20
+scores$`50MA_vs_200MA`[indicator_df$ma_200 < indicator_df$ma_50] <- 20
+
+# 20 vs 200
+scores$`20MA_vs_200MA`[indicator_df$ma_50 >= indicator_df$ma_200] <- 15
+scores$`20MA_vs_200MA`[indicator_df$ma_50 < indicator_df$ma_200] <- -15
+
+# Aroon
+scores$Aroon[indicator_df$aroon_ <= 30] <- -5
+scores$Aroon[indicator_df$aroon_ > 30] <- 0
+scores$Aroon[indicator_df$aroon_ >= 70] <- 5
+
+
+
+# Chaikin Volatility
+scores$`Chaikin Volatility`[indicator_df$chaikinVol <= -.5] <- -6
+scores$`Chaikin Volatility`[indicator_df$chaikinVol > -.5] <- -3
+scores$`Chaikin Volatility`[indicator_df$chaikinVol >= .0] <- 3
+scores$`Chaikin Volatility`[indicator_df$chaikinVol >= .5] <- 6
+
+# Chaikin Money Flow
+scores$`Chaikin Money Flow` <- 0
+scores$`Chaikin Money Flow`[30 <= indicator_df$aroon_ & indicator_df$aroon_ <= -.25] <- -5
+scores$`Chaikin Money Flow`[indicator_df$aroon_ >= 70 & indicator_df$chaikinMF >= 0.25] <- 5
+
+# Chaikin Advance / Decline
+scores$`Chaikin Advance/Decline`[indicator_df$Delt.1.arithmetic >= 0] <- 5
+scores$`Chaikin Advance/Decline`[indicator_df$Delt.1.arithmetic < 0]  <- -5
+
+# RSI
+scores$RSI[indicator_df$RSI_ >= .0] <- -10
+scores$RSI[indicator_df$RSI_ > .5] <- 10
+
+# Percent Rank
+scores$`Percent Rank`[indicator_df$percentRank >= 0] <- -10
+scores$`Percent Rank`[indicator_df$percentRank >= .2] <- -5
+scores$`Percent Rank`[indicator_df$percentRank >= .5] <- 5
+scores$`Percent Rank`[indicator_df$percentRank >= .80] <- 10
+
+# runVar
+scores$runVar[indicator_df$runningVar_EMA >= indicator_df$runningVar_MA] <- -10
+scores$runVar[indicator_df$runningVar_EMA < indicator_df$runningVar_MA] <- 0
+
+# Total Score
+for (i in 1:nrow(scores)){
+  scores$Value[i] <- sum(scores[i,1:13])
+}
+
+scores$Label <- "Score"
+scores$Date <- indicator_df$`as.Date(SPY_data$ref.date)`
+```
+
+```{r}
+# Re-pull SPY and VXX Data if needed
+tickers <- c("SPY", "VXX")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2018-01-25",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Compare score with price action
+price_data <- price_data[,-2] # removing returns data
+#score_time_series <- scores[-1,14:16]
+
+# Smooth score with an EMA
+score_EMA <- scores[,14:16]
+score_EMA$Value <- EMA(scores$Value, n = 20)
+score_EMA$Label <- "ScoreEMA"
+
+# adding an MA for the crossover
+score_MA <- scores[,14:16]
+score_MA$Value <- EMA(scores$Value, n = 50)
+score_MA$Label <- "Score50MA"
+price_data <- rbind(price_data, score_EMA[-(1:19),],score_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+
+
+library(ggplot2)
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+```
+```{r}
+# Apply the model to a portfolio - simple MA crossover
+# Re-pull SPY and VXX Data if needed
+tickers <- c("SPY", "VXX")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2018-01-24",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+risk_status <- scores[,14:16]
+risk_status$Value <- 0
+risk_status$Value[score_EMA$Value >= score_MA$Value] <- 1
+
+portfolio <- scores[,14:16]
+portfolio$Value <- 100
+for(i in 49:nrow(portfolio)){
+  if (risk_status$Value[i] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    portfolio$Value[i] <- portfolio$Value[i-1]
+  }
+}
+portfolio$Label <- "Portfolio"
+
+# Set up SPY portfolio
+SPY_portfolio <- scores[,14:16]
+
+SPY_portfolio$Value <- 100
+for(i in 49:nrow(SPY_portfolio)){
+    SPY_portfolio$Value[i] <- SPY_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+SPY_portfolio$Label <- "SPY Portfolio"
+
+# Rebind everything
+price_data <- price_data[,-2]
+price_data <- rbind(price_data, score_EMA[-(1:19),],portfolio[-(1:49),],SPY_portfolio[-(1:49),],score_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(SPY_portfolio[-(1:49),], portfolio[-(1:49),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+
+```
+```{r}
+# Comparing the sharpe ratios and returns
+sharpe_ratios <- data.frame(as.matrix(0,2,2))
+sharpe_ratios$as.matrix.0..2..2.[1] <- mean(Delt(portfolio$Value[-(1:489)])[-1])/sd(Delt(portfolio$Value[-(1:489)])[-1])
+sharpe_ratios$as.matrix.0..2..3.[1] <- 
+mean(Delt(SPY_portfolio$Value[-(1:489)])[-1])/sd(Delt(SPY_portfolio$Value[-(1:489)])[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "SPY Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "SPY Sharpe Annualized")
+View(sharpe_ratios_annualized)
+```
+
+```{r} 
+###############################################
+# Now we try to imporve the buy signal...strategy is to use VXX MA crossover for buying.
+#################################################
+# Re-pull SPY and VXX Data if needed
+tickers <- c("SPY", "VXX")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2018-01-25",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+price_data <- price_data[,-2]
+
+# VIX EMA
+VIX_EMA <- scores[-1,14:16] # removing the first row because VXX starts on 1/25/2018
+VIX_EMA$Value <- EMA(price_data$Value[which(price_data$Label == "VXX")], n = 5)
+VIX_EMA$Label <- "VIX EMA"
+
+# adding an MA for the crossover
+VIX_MA <- scores[-1,14:16]
+VIX_MA$Value <- EMA(price_data$Value[which(price_data$Label == "VXX")], n = 7)
+VIX_MA$Label <- "VIX 50MA"
+
+
+
+price_data <- rbind(price_data, score_EMA[-(1:20),],score_MA[-(1:50),],VIX_EMA[-(1:19),],VIX_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+
+```
+```{r}
+# Now we set up the portfolio again
+risk_status <- scores[-1,14:16]
+risk_status$Value <- 0
+for(i in 50:nrow(risk_status)){
+  if (score_EMA$Value[i] < score_MA$Value[i]){
+    if (VIX_EMA$Value[i] < VIX_MA$Value[i]){
+      risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+  } else {
+    if (score_EMA$Value[i] > score_MA$Value[i]){
+       risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+   
+  }
+}
+
+
+
+# Re-pull SPY and VXX Data if needed
+tickers <- c("SPY", "VXX")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2018-01-25",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Build the portfolio
+
+portfolio <- scores[-1,14:16]
+portfolio$Value <- 100
+for(i in 50:nrow(portfolio)){
+  if (risk_status$Value[i] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    if (score_EMA$Value[i] < score_MA$Value[i]){ # remove if no short exposure
+       portfolio$Value[i] <- portfolio$Value[i-1] * (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    } else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    }
+   
+  }
+}
+portfolio$Label <- "Portfolio"
+
+# Set up SPY portfolio
+SPY_portfolio <- scores[-1,14:16]
+
+SPY_portfolio$Value <- 100
+for(i in 49:nrow(SPY_portfolio)){
+    SPY_portfolio$Value[i] <- SPY_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+SPY_portfolio$Label <- "SPY Portfolio"
+
+# Rebind everything
+price_data <- price_data[,-2]
+price_data <- rbind(price_data,portfolio[-(1:49),],SPY_portfolio[-(1:49),],score_EMA[-(1:20),],score_MA[-(1:50),],VIX_EMA[-(1:19),],VIX_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(SPY_portfolio[-(1:49),], portfolio[-(1:49),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+
+```
+```{r}
+# Evaluate sharpe
+sharpe_ratios <- data.frame(matrix(0,2,2))
+sharpe_ratios$X1[1] <- mean(Delt(portfolio$Value)[-1])/sd(Delt(portfolio$Value)[-1])
+sharpe_ratios$X2[1] <- mean(Delt(SPY_portfolio$Value)[-1])/sd(Delt(SPY_portfolio$Value)[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "SPY Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "SPY Sharpe Annualized")
+View(sharpe_ratios_annualized[1,])
+
+```
+
+
+```{r}
+# Trying 2021 only
+
+portfolio <- scores[-1,14:16]
+portfolio$Value <- 100
+
+# Re-pull SPY and VXX Data if needed
+tickers <- c("SPY", "VXX")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2018-01-25",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+
+for(i in which(portfolio$Date == "2020-08-03"):(nrow(scores)-1)){
+  if (risk_status$Value[i] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    if (score_EMA$Value[i] < score_MA$Value[i]){ # remove if no short exposure
+       portfolio$Value[i] <- portfolio$Value[i-1] * (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    } else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    }
+   
+  }
+}
+portfolio$Label <- "Portfolio"
+
+# Set up SPY portfolio
+SPY_portfolio <- scores[-1,14:16]
+
+SPY_portfolio$Value <- 100
+for(i in which(portfolio$Date == "2020-08-03"):(nrow(scores)-1)){
+    SPY_portfolio$Value[i] <- SPY_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+SPY_portfolio$Label <- "SPY Portfolio"
+
+# Rebind everything
+price_data <- price_data[,-2]
+price_data <- rbind(portfolio[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1),],SPY_portfolio[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1),],score_EMA[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1),],score_MA[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1),],VIX_EMA[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1),],VIX_MA[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(SPY_portfolio[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1),], portfolio[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+```
+```{r}
+# Compare the sharpe
+sharpe_ratios <- data.frame(matrix(0,2,2))
+sharpe_ratios$X1[1] <- mean(Delt(portfolio$Value[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1)])[-1])/sd(Delt(portfolio$Value[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1)])[-1])
+sharpe_ratios$X2[1] <- mean(Delt(SPY_portfolio$Value[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1)])[-1])/sd(Delt(SPY_portfolio$Value[which(portfolio$Date == "2020-08-03"):(nrow(scores)-1)])[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "SPY Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "SPY Sharpe Annualized")
+View(sharpe_ratios_annualized[1,])
+
+```
+
+```{r}
+# Another apporach...rather than MA crossover we use MA of the rate of change
+Delt()
+
+```
+
+
+```{r} ####################################### garbage below #########################################################################
+library(TTR)
+
+# all indicators related to the SPY
+sma = as.numeric(SMA(price_data[,1]))
+cci = as.numeric(CCI(price_data[,1]))
+cmo = as.numeric(CMO(price_data[,1]))
+macd = as.numeric(MACD(price_data[,1])[,1])
+bbands = as.numeric(BBands(price_data[,1])[,4])
+runSum = as.numeric(runSum(price_data[,1]))
+fastK= as.numeric(stoch(price_data[,1])[,1])
+fastD = as.numeric(stoch(price_data[,1])[,2])
+slowD = as.numeric(stoch(price_data[,1])[,3])
+tdi = as.numeric(TDI(price_data[,1])[,1])
+trix = as.numeric(TRIX(price_data[,1])[,1])
+volatility = as.numeric(volatility(price_data[,1]))
+wpr = as.numeric(WPR(price_data[,1]))
+zigZag = as.numeric(ZigZag(price_data[,1]))
+
+# VXX daily returns
+vxxReturns = dailyReturn(VXX, type="log")
+
+indicator_df = data.frame(
+  sma,
+  cci,
+  cmo,
+  macd,
+  bbands,
+  fastK,
+  fastD,
+  slowD,
+  tdi,
+  trix,
+  volatility
+)
+
+indicator_df = indicator_df[complete.cases(indicator_df), ] # not lagged or logs
+
+
+library(corrplot)
+corrplot(cor(indicator_df, use = "complete.obs"), method = "number")
+
+indicator_df2 = data.frame(
+  Delt(sma,type='arithmetic'),
+  Delt(cci,type='arithmetic'),
+  Delt(cmo,type='arithmetic'),
+  Delt(macd,type='arithmetic'),
+  Delt(bbands,type='arithmetic'),
+  Delt(fastK,type='arithmetic'),
+  Delt(fastD,type='arithmetic'),
+  Delt(slowD,type='arithmetic'),
+  Delt(tdi,type='arithmetic'),
+  Delt(trix,type='arithmetic'),
+  Delt(volatility,type='arithmetic')
+)
+colnames(indicator_df2) <- c("sma", 'cci', 'cmo', 'macd', 'bbands', 'fastK', 'fastD', 'slowD', 'tdi', 'trix', 'volatility')
+rownames(indicator_df2) <- rownames(price_data)
+nrow(vxxReturns)
+nrow(indicator_df2)
+#View(vxxReturns)
+#View(indicator_df2)
+###########################################################################################################################
+### This modifies the lag of the model - change 7 to what you want the lag to be, and change 6 to your desired lag - 1 on the next line
+#############################################################################
+indicator_df2 <- indicator_df2[7:nrow(indicator_df2),]
+indicator_df2$vxxReturns <-  vxxReturns[1:(nrow(vxxReturns)-6),]
+indicator_df2 <- na.omit(indicator_df2)
+indicator_df2 <- indicator_df2[!is.infinite(rowSums(indicator_df2)),]
+
+#View(indicator_df2) 
+#indicator_df2 = indicator_df2[-na.omit(indicator_df2), ]
+View(scores)
+
+```
+
+```{r}
+train=sample(length(indicator_df2),length(indicator_df2)*.8,replace=FALSE) #Train/Test split
+
+library(glmnet)
+
+lin.mod = glm(indicator_df2$vxxReturns~.,data=indicator_df2,subset=train)
+summary(lin.mod)
+
+lin.pred=predict(lin.mod,indicator_df2[-train,])
+mean((lin.pred-indicator_df2$vxxReturns[-train])^2)
+
+```
+```{r}
+train=sample(length(indicator_df2),length(indicator_df2)*.8,replace=FALSE) #Train/Test split
+
+library(glmnet)
+
+lin.mod = glm(indicator_df2$vxxReturns~.,data=indicator_df2,subset=train)
+summary(lin.mod)
+
+lin.pred=predict(lin.mod,indicator_df2[-train,])
+mean((lin.pred-indicator_df2$vxxReturns[-train])^2)
+
+```
+
+```{r}
+library(tree)
+tree.reg = tree(indicator_df2$vxxReturns~.,data=indicator_df2,subset=train)
+
+
+mean((indicator_df2$vxxReturns[train] - predict(tree.reg, indicator_df2[train,]))^2) #Training MSE
+
+y.tree.pred = predict(tree.reg, indicator_df2[-train,]) # Predict with the single regression tree
+tree.MSE = mean((indicator_df2$vxxReturns[-train] - y.tree.pred)^2)
+tree.MSE #Test MSE
+
+```
+```{r}
+library(randomForest)
+
+rf.reg = randomForest(indicator_df2$vxxReturns~.,data=indicator_df2,subset=train,mtry=3,ntree=300,importance=TRUE)
+rf.reg #Gives both the number of variables at each split but also provides out-of-bag estimate of error rate
+
+mean((indicator_df2$vxxReturns[train] - predict(rf.reg, indicator_df2[train,]))^2)
+
+y.rf.pred = predict(rf.reg, indicator_df2[-train,]) # Predict with bagging
+rf.MSE = mean((indicator_df2$vxxReturns[-train] - y.rf.pred)^2)
+rf.MSE
+
+
+```
+
+```{r}
+getSymbols(symbols, from="2021-01-02", to="2021-11-30")
+
+price_data = data.frame(SPY$SPY.Adjusted,VXX$VXX.Adjusted)
+colnames(price_data) <- symbols
+
+# all indicators related to the SPY
+sma = as.numeric(SMA(price_data[,1]))
+cci = as.numeric(CCI(price_data[,1]))
+cmo = as.numeric(CMO(price_data[,1]))
+macd = as.numeric(MACD(price_data[,1])[,1])
+bbands = as.numeric(BBands(price_data[,1])[,4])
+runSum = as.numeric(runSum(price_data[,1]))
+fastK= as.numeric(stoch(price_data[,1])[,1])
+fastD = as.numeric(stoch(price_data[,1])[,2])
+slowD = as.numeric(stoch(price_data[,1])[,3])
+tdi = as.numeric(TDI(price_data[,1])[,1])
+trix = as.numeric(TRIX(price_data[,1])[,1])
+volatility = as.numeric(volatility(price_data[,1]))
+wpr = as.numeric(WPR(price_data[,1]))
+zigZag = as.numeric(ZigZag(price_data[,1]))
+
+# VXX daily returns
+vxxReturns = dailyReturn(VXX, type="log")
+
+indicator_df = data.frame(
+  sma,
+  cci,
+  cmo,
+  macd,
+  bbands,
+  fastK,
+  fastD,
+  slowD,
+  tdi,
+  trix,
+  volatility
+)
+
+indicator_df = indicator_df[complete.cases(indicator_df), ] # not lagged or logs
+
+# all indicators related to the SPY
+sma = as.numeric(SMA(price_data[,1]))
+cci = as.numeric(CCI(price_data[,1]))
+cmo = as.numeric(CMO(price_data[,1]))
+macd = as.numeric(MACD(price_data[,1])[,1])
+bbands = as.numeric(BBands(price_data[,1])[,4])
+runSum = as.numeric(runSum(price_data[,1]))
+fastK= as.numeric(stoch(price_data[,1])[,1])
+fastD = as.numeric(stoch(price_data[,1])[,2])
+slowD = as.numeric(stoch(price_data[,1])[,3])
+tdi = as.numeric(TDI(price_data[,1])[,1])
+trix = as.numeric(TRIX(price_data[,1])[,1])
+volatility = as.numeric(volatility(price_data[,1]))
+wpr = as.numeric(WPR(price_data[,1]))
+zigZag = as.numeric(ZigZag(price_data[,1]))
+
+
+
+indicator_df2 = data.frame(
+  Delt(sma,type='arithmetic'),
+  Delt(cci,type='arithmetic'),
+  Delt(cmo,type='arithmetic'),
+  Delt(macd,type='arithmetic'),
+  Delt(bbands,type='arithmetic'),
+  Delt(fastK,type='arithmetic'),
+  Delt(fastD,type='arithmetic'),
+  Delt(slowD,type='arithmetic'),
+  Delt(tdi,type='arithmetic'),
+  Delt(trix,type='arithmetic'),
+  Delt(volatility,type='arithmetic')
+)
+colnames(indicator_df2) <- c("sma", 'cci', 'cmo', 'macd', 'bbands', 'fastK', 'fastD', 'slowD', 'tdi', 'trix', 'volatility')
+rownames(indicator_df2) <- rownames(price_data)
+
+indicator_df2 <- indicator_df2[7:nrow(indicator_df2),]
+indicator_df2$vxxReturns <-  vxxReturns[1:(nrow(vxxReturns)-6),]
+indicator_df2 <- na.omit(indicator_df2)
+indicator_df2 <- indicator_df2[!is.infinite(rowSums(indicator_df2)),]
+
+y.rf.pred = predict(rf.reg, indicator_df2) 
+
+result <- data.frame(y.rf.pred)
+
+
+
+result$direction <- (result$y.rf.pred >0) +0
+result$date <- rownames(result)
+vol_expected <- data.frame(result[which(result$direction == 1),])
+vol_expected$date <- as.Date(rownames(vol_expected))
+
+###########################################################################################################################
+### This modifies for how far out you begin to go risk-off after the signal is triggered. Ex: 5 means 5 days after the signal is triggered go risk off
+#############################################################################
+for (i in 1:nrow(vol_expected)){
+  vol_expected$date[i] <- vol_expected$date[i]+5
+}
+
+
+price_data$date <- rownames(price_data)
+price_data$VXX_direction_pred <- 0
+
+for(i in 1:nrow(price_data)){
+  for (j in 1: nrow(vol_expected)){
+    if(price_data$date[i] == vol_expected$date[j]){
+    price_data$VXX_direction_pred[i] <- 1
+    }
+  }
+}
+
+price_data$port <- 100
+price_data$spy_port <- 100
+
+###########################################################################################################################
+### This modifies for how many days the model goes risk-off once the signal gets triggered, change 5 to your desired period
+#############################################################################
+counter = 0;
+for(i in 1:nrow(price_data)){
+  if (i != nrow(price_data)){
+  if(price_data$VXX_direction_pred[i] == 1){
+    if (counter != 6){
+      price_data$VXX_direction_pred[i+1] <- 1
+      counter = counter + 1
+    } else {
+      counter = 0
+      price_data$VXX_direction_pred[i+1] <- 0
+    }
+  }
+  }
+}
+
+price_data$spy_ret <- dailyReturn(SPY$SPY.Adjusted, type = "arithmetic")
+price_data$port_ret <- dailyReturn(SPY$SPY.Adjusted, type = "arithmetic")
+
+
+for(i in 1:nrow(price_data)){
+  if(price_data$VXX_direction_pred[i] == 1){
+    price_data$port_ret[i] <- 0
+  }
+}
+
+
+
+for(i in 2:nrow(price_data)){
+  price_data$spy_port[i] <- price_data$spy_port[i-1] * (1+price_data$spy_ret[i-1])
+  price_data$port[i] <- price_data$port[i-1] * (1+price_data$port_ret[i-1])
+}
+
+
+final_result <- cbind(price_data$port,price_data$spy_port)
+rownames(final_result) <- rownames(price_data)
+colnames(final_result) <- c("Portfolio Return", "SPY Return")
+rownames(final_result) <- rownames(price_data)
+final_result <- data.frame(final_result)
+final_result$date <- as.Date(rownames(final_result))
+
+sharpe_ratios <- data.frame(as.matrix(0,2,2))
+sharpe_ratios$as.matrix.0..2..2.[1] <- (mean(price_data$port_ret))/sd(price_data$port_ret)
+sharpe_ratios$as.matrix.0..2..3.[1] <-(mean(price_data$spy_ret))/sd(price_data$spy_ret)
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "SPY Daily Sharpe")
+View(sharpe_ratios)
+
+
+library(ggplot2)
+library(reshape2)
+
+
+final_result <- melt(final_result, id = "date")
+
+
+ggplot(final_result, aes(x = final_result$date, y = final_result$value, color = variable, group = final_result$variable))+geom_line()+ scale_x_date(date_minor_breaks = "1 day") + labs(color = "Portfolio") + xlab("Date") + ylab("Portfolio Value") + ggtitle("Model Performance vs. SPY") 
+
+
+
+
+```
+
