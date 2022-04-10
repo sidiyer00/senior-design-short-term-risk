@@ -1,0 +1,1455 @@
+---
+title: "Data Gathering"
+author: "Marc Vitenzon"
+date: "11/14/2021"
+output: pdf_document
+---
+
+```{r}
+library(BatchGetSymbols)
+#Step One: Get Price Data
+
+
+# Data set for QQQ only 
+tickers <- "QQQ"
+first.date <- as.Date("2001-02-01")-365 #VXN becomes available at this date, but to get percent rank we go 365 days back 
+last.date <- as.Date(macro_indicators$Date[nrow(macro_indicators)])+1
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+QQQ_data <- data.frame(l.out$df.tickers)
+
+
+# Data set for price of QQQ and VXN only
+first.date <- as.Date("2001-01-31") #scores starts on this date...
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Data set including Open, Close, and Volume for both
+complete_data <- data.frame(l.out$df.tickers)
+
+
+
+######## Optional #######################
+# Data set of QQQ constituents
+# sp500 <- GetSP500Stocks() # constituents vary over time so this is a not a perfect implementation
+# tickers <- c(sp500$Tickers)
+# l.out <- BatchGetSymbols(tickers = tickers,
+# first.date = first.date,
+# last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+# constituents <- l.out$df.tickers
+
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Apply the indicators
+
+library(TTR)
+library(quantmod)
+
+# all indicators related to the QQQ
+ema_20 = as.numeric(EMA(QQQ_data$price.adjusted, n = 20))
+ma_50 = as.numeric(SMA(QQQ_data$price.adjusted, n = 50))
+ma_200 = as.numeric(SMA(QQQ_data$price.adjusted, n = 200))
+aroon_ = as.numeric(aroon(QQQ_data$price.adjusted, n = 20)) # using daily close, HL of day also possible
+chaikinVol = as.numeric(chaikinVolatility(cbind(QQQ_data$price.high,QQQ_data$price.low), n = 20))
+chaikinMF  = as.numeric(CMF(cbind(QQQ_data$price.high,QQQ_data$price.low,QQQ_data$price.close),QQQ_data$volume, n = 20))
+chaikinAD  =  Delt(SMA(as.numeric(chaikinAD(cbind(QQQ_data$price.high,QQQ_data$price.low,QQQ_data$price.close),QQQ_data$volume)), 14)) # moving average of chaikin Adv/Dec
+percentRank = as.numeric(runPercentRank(QQQ_data$price.adjusted, n = 252))
+RSI_ = as.numeric(RSI(QQQ_data$price.adjusted, n = 20))
+runningVar_EMA = EMA(as.numeric(runVar(QQQ_data$price.adjusted, n = 20)),10)
+runningVar_MA = SMA(as.numeric(runVar(QQQ_data$price.adjusted, n = 20)),30)
+                     
+
+indicator_df = cbind(
+  ema_20,
+  ma_50,
+  ma_200,
+  aroon_,
+  chaikinVol,
+  chaikinMF,
+  chaikinAD,
+  percentRank,
+  RSI_,
+  runningVar_EMA,
+  runningVar_MA
+)
+
+
+indicator_df <- data.frame(indicator_df)
+indicator_df <- indicator_df[1:length(QQQ_data$price.open),]
+indicator_df <- cbind(indicator_df, QQQ_data$price.adjusted,as.Date(QQQ_data$ref.date))
+indicator_df = indicator_df[complete.cases(indicator_df), ]
+
+library(corrplot)
+
+corrplot(cor(indicator_df[,1:11], use = "complete.obs"), method = "number")
+library(caret)
+highlyCorrelated <- findCorrelation(cor(indicator_df[,1:11]), cutoff = 0.75)
+# print indexes of highly correlated attributes
+print(highlyCorrelated)
+
+```
+```{r, warning=FALSE, message=FALSE}
+# Apply the scoring system:
+
+scores <- data.frame(matrix(nrow = nrow(indicator_df), ncol = 16))
+colnames(scores) <- c("20_EMA", "50_SMA", "200_SMA", "20MA_vs_50_MA", "50MA_vs_200MA", "20MA_vs_200MA", "Aroon", "Chaikin Volatility", "Chaikin Money Flow", "Chaikin Advance/Decline", "RSI", "Percent Rank", "runVar", "Value", "Label" , "Date")
+
+
+
+## Moving Average Scoring
+# 20 EMA 
+scores$`20_EMA`[indicator_df$`QQQ_data$price.adjusted` >= indicator_df$ema_20] <- 5
+scores$`20_EMA`[indicator_df$`QQQ_data$price.adjusted` < indicator_df$ema_20] <- -5
+
+# 50 SMA
+scores$`50_SMA`[indicator_df$`QQQ_data$price.adjusted` >= indicator_df$ma_50] <- 5
+scores$`50_SMA`[indicator_df$`QQQ_data$price.adjusted` < indicator_df$ma_50] <- -5
+
+# 200 SMA
+scores$`200_SMA`[indicator_df$`QQQ_data$price.adjusted` >= indicator_df$ma_200] <- 5
+scores$`200_SMA`[indicator_df$`QQQ_data$price.adjusted` < indicator_df$ma_200] <- -5
+
+# 20 vs 50
+scores$`20MA_vs_50_MA`[indicator_df$ema_20 >= indicator_df$ma_50] <- 5
+scores$`20MA_vs_50_MA`[indicator_df$ema_20 < indicator_df$ma_50] <- -5
+
+# 50 vs 200
+scores$`50MA_vs_200MA`[indicator_df$ma_200 >= indicator_df$ma_50] <- -5
+scores$`50MA_vs_200MA`[indicator_df$ma_200 < indicator_df$ma_50] <- 5
+
+# 20 vs 200
+scores$`20MA_vs_200MA`[indicator_df$ma_50 >= indicator_df$ma_200] <- 5
+scores$`20MA_vs_200MA`[indicator_df$ma_50 < indicator_df$ma_200] <- -5
+
+# Aroon
+scores$Aroon[indicator_df$aroon_ <= 30] <- -5
+scores$Aroon[indicator_df$aroon_ > 30] <- 0
+scores$Aroon[indicator_df$aroon_ >= 70] <- 5
+
+
+
+# Chaikin Volatility
+scores$`Chaikin Volatility`[indicator_df$chaikinVol <= -.5] <- -5
+scores$`Chaikin Volatility`[indicator_df$chaikinVol > -.5] <- -3
+scores$`Chaikin Volatility`[indicator_df$chaikinVol >= .0] <- 3
+scores$`Chaikin Volatility`[indicator_df$chaikinVol >= .5] <- 5
+
+# Chaikin Money Flow
+scores$`Chaikin Money Flow` <- 0
+scores$`Chaikin Money Flow`[30 <= indicator_df$aroon_ & indicator_df$aroon_ <= -.25] <- -5
+scores$`Chaikin Money Flow`[indicator_df$aroon_ >= 70 & indicator_df$chaikinMF >= 0.25] <- 5
+
+# Chaikin Advance / Decline
+scores$`Chaikin Advance/Decline`[indicator_df$Delt.1.arithmetic >= 0] <- 5
+scores$`Chaikin Advance/Decline`[indicator_df$Delt.1.arithmetic < 0]  <- -5
+
+# RSI
+scores$RSI[indicator_df$RSI_ >= .0] <- -5
+scores$RSI[indicator_df$RSI_ >= .3] <- 0
+scores$RSI[indicator_df$RSI_ > .7] <- 5
+
+# Percent Rank
+scores$`Percent Rank`[indicator_df$percentRank >= 0] <- -5
+scores$`Percent Rank`[indicator_df$percentRank >= .2] <- -3
+scores$`Percent Rank`[indicator_df$percentRank >= .5] <- 3
+scores$`Percent Rank`[indicator_df$percentRank >= .80] <- 10
+
+# runVar
+scores$runVar[indicator_df$runningVar_EMA >= indicator_df$runningVar_MA] <- -5
+scores$runVar[indicator_df$runningVar_EMA < indicator_df$runningVar_MA] <- 5
+
+# Total Score
+for (i in 1:nrow(scores)){
+  scores$Value[i] <- sum(scores[i,1:13])
+}
+
+scores$Label <- "Score"
+scores$Date <- indicator_df$`as.Date(QQQ_data$ref.date)`
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Compare score with price action
+price_data <- price_data[,-2] # removing returns data
+#score_time_series <- scores[-1,14:16]
+
+# Smooth score with an EMA
+score_EMA <- scores[,14:16]
+score_EMA$Value <- EMA(scores$Value, n = 10)
+score_EMA$Label <- "ScoreEMA"
+
+# adding an MA for the crossover
+score_MA <- scores[,14:16]
+score_MA$Value <- EMA(scores$Value, n = 50)
+score_MA$Label <- "Score50MA"
+price_data <- rbind(price_data, score_EMA[-(1:19),],score_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+
+
+
+library(ggplot2)
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+```
+```{r, warning=FALSE, message=FALSE}
+# Apply the model to a portfolio - simple MA crossover
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+risk_status <- scores[,14:16]
+risk_status$Value <- 0
+risk_status$Value[score_EMA$Value >= score_MA$Value] <- 1
+
+portfolio <- scores[,14:16]
+portfolio$Value <- 100
+for(i in 49:nrow(portfolio)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    portfolio$Value[i] <- portfolio$Value[i-1]
+  }
+}
+portfolio$Label <- "Portfolio"
+
+#Set up QQQ portfolio
+QQQ_portfolio <- scores[,14:16]
+
+QQQ_portfolio$Value <- 100
+for(i in 49:nrow(QQQ_portfolio)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+QQQ_portfolio$Label <- "QQQ Portfolio"
+
+# Rebind everything
+price_data <- price_data[,-2]
+price_data <- rbind(price_data, score_EMA[-(1:19),],portfolio[-(1:49),],QQQ_portfolio[-(1:49),],score_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(QQQ_portfolio[-(1:49),], portfolio[-(1:49),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+
+```
+```{r}
+# Comparing the sharpe ratios and returns
+sharpe_ratios <- data.frame(as.matrix(0,2,2))
+sharpe_ratios$as.matrix.0..2..2.[1] <- mean(Delt(portfolio$Value)[-1])/sd(Delt(portfolio$Value)[-1])
+sharpe_ratios$as.matrix.0..2..3.[1] <- 
+mean(Delt(QQQ_portfolio$Value)[-1])/sd(Delt(QQQ_portfolio$Value)[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+# Actual Sharpe Calc:
+library(PerformanceAnalytics)
+portfolio_returns <- data.frame(Delt(portfolio$Value)[-1])
+portfolio_returns_xts <- xts(portfolio_returns, portfolio$Date[-1])
+SharpeRatio.annualized(portfolio_returns_xts)
+
+QQQ_returns <- data.frame(Delt(QQQ_portfolio$Value)[-1])
+QQQ_returns_xts <- xts(QQQ_returns, QQQ_portfolio$Date[-1])
+SharpeRatio.annualized(QQQ_returns_xts)
+```
+
+```{r, warning=FALSE, message=FALSE} 
+###############################################
+# Now we try to improve the buy signal...strategy is to use VXX MA crossover for buying.
+#################################################
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+price_data <- price_data[,-2]
+
+mylist <- c()
+for (i in 1:nrow(price_data)){
+  if (sum(price_data$Date[i] == scores$Date) == 0){
+    mylist <- c(mylist, i)
+  }
+}
+
+
+if (length(mylist) > 0) {
+   price_data <- price_data[-mylist,]
+}
+
+
+
+
+VXN_EMA <- scores[,14:16]
+VXN_EMA$Value <- EMA(price_data$Value[which(price_data$Label == "^VXN")], n = 3 )
+VXN_EMA$Label <- "VXN 5EMA"
+# adding an MA for the crossover
+VXN_MA <- scores[,14:16]
+VXN_MA$Value <- EMA(price_data$Value[which(price_data$Label == "^VXN")], n = 5)
+VXN_MA$Label <- "VXN 7EMA"
+
+
+
+price_data <- rbind(price_data, score_EMA[-(1:20),],score_MA[-(1:50),],VXN_EMA[-(1:19),],VXN_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+```
+```{r, warning=FALSE, message=FALSE}
+# Now we set up the portfolio again
+
+risk_status <- scores[,14:16]
+risk_status$Value <- 0
+for(i in 50:nrow(risk_status)){
+  if (score_EMA$Value[i] < score_MA$Value[i]){
+    if (VXN_EMA$Value[i] < VXN_MA$Value[i]){
+      risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+  } else {
+    if (score_EMA$Value[i] > score_MA$Value[i]){
+       risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+   
+  }
+}
+
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2001-01-31",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Build the portfolio
+
+portfolio <- scores[,14:16]
+portfolio$Value <- 100
+for(i in 50:nrow(portfolio)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    #if (score_EMA$Value[i] < score_MA$Value[i]){ # remove if no short exposure
+    #   portfolio$Value[i] <- portfolio$Value[i-1]# * (1-(.25)*price_data$`Daily Return`[i]) 
+    #   #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    #} else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    #}
+   
+  }
+}
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- scores[,14:16]
+
+QQQ_portfolio$Value <- 100
+for(i in 49:nrow(QQQ_portfolio)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+QQQ_portfolio$Label <- "QQQ Portfolio"
+
+# Rebind everything
+price_data <- price_data[,-2]
+price_data <- rbind(price_data,portfolio[-(1:49),],QQQ_portfolio[-(1:49),],score_EMA[-(1:20),],score_MA[-(1:50),],VXN_EMA[-(1:19),],VXN_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(QQQ_portfolio[-(1:49),], portfolio[-(1:49),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+```
+```{r}
+# Evaluate sharpe
+sharpe_ratios <- data.frame(matrix(0,2,2))
+sharpe_ratios$X1[1] <- mean(Delt(portfolio$Value)[-1])/sd(Delt(portfolio$Value)[-1])
+sharpe_ratios$X2[1] <- mean(Delt(QQQ_portfolio$Value)[-1])/sd(Delt(QQQ_portfolio$Value)[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+# Actual Sharpe Calc:
+portfolio_returns <- data.frame(Delt(portfolio$Value)[-1])
+portfolio_returns_xts <- xts(portfolio_returns, portfolio$Date[-1])
+SharpeRatio.annualized(portfolio_returns_xts)
+
+QQQ_returns <- data.frame(Delt(QQQ_portfolio$Value)[-1])
+QQQ_returns_xts <- xts(QQQ_returns, QQQ_portfolio$Date[-1])
+SharpeRatio.annualized(QQQ_returns_xts)
+```
+
+
+```{r, warning=FALSE, message=F}
+# Trying 2018-2022
+
+portfolio <- scores[,14:16]
+portfolio$Value <- 100
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+################
+##### Date from which you want the model to start
+########"
+
+start_date =  as.Date("2018-01-04") # can't be a weekend/market holiday!!
+for(i in which(portfolio$Date == start_date):which(portfolio$Date == end_date)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    if (score_EMA$Value[i] < score_MA$Value[i]){ # remove if no short exposure
+       portfolio$Value[i] <- portfolio$Value[i-1] #* (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    } else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    }
+   
+  }
+}
+
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- scores[,14:16]
+
+QQQ_portfolio$Value <- 100
+
+for(i in which(portfolio$Date == start_date):which(portfolio$Date == end_date)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+
+QQQ_portfolio$Label <- "QQQ Portfolio"
+# Rebind everything
+price_data <- price_data[which(price_data$Label == "^VXN"),]
+price_data <- price_data[,-2]
+price_data <- rbind(portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],QQQ_portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_EMA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_MA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],VXN_EMA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],VXN_MA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],price_data[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],risk_signal[which(portfolio$Date == start_date):which(portfolio$Date == end_date),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()+ggtitle("Technical Variable Scoring Model - 10 and 50 EMAs")
+
+risk_signal <- QQQ_portfolio
+risk_signal$Value <- 1
+risk_signal$Value[which(risk_status$Value == 0)] <- 400
+risk_signal$Label <- "Risk Off"
+
+####### Save for future use
+TA_score_model <- risk_signal
+TA_score_model$Value[which(TA_score_model$Value == 1)] <- 0
+TA_score_model$Value[which(TA_score_model$Value == 400)] <- 1
+TA_score_model$Label <- "TA Score Model"
+####### Save for future use
+
+port_comp <- rbind(QQQ_portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),], portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),], risk_signal[which(portfolio$Date == start_date):which(portfolio$Date == end_date),])
+
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()+ggtitle("Technical Variable Scoring Model - 10 and 50 EMAs")
+
+
+```
+```{r}
+# Compare the sharpe
+sharpe_ratios <- data.frame(matrix(0,2,2))
+sharpe_ratios$X1[1] <- mean(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])/sd(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+sharpe_ratios$X2[1] <- mean(Delt(QQQ_portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])/sd(Delt(QQQ_portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+# Actual Sharpe Calc:
+portfolio_returns <- data.frame(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+portfolio_returns_xts <- xts(portfolio_returns, portfolio$Date[which(portfolio$Date == (as.Date(start_date))):which(portfolio$Date == end_date)][-1])
+SharpeRatio.annualized(portfolio_returns_xts)
+
+QQQ_portfolio_returns <- data.frame(Delt(QQQ_portfolio$Value[which(QQQ_portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+QQQ_portfolio_returns_xts <- xts(QQQ_portfolio_returns, QQQ_portfolio$Date[which(QQQ_portfolio$Date == (as.Date(start_date))):which(portfolio$Date == end_date)][-1])
+SharpeRatio.annualized(QQQ_portfolio_returns_xts)
+```
+
+```{r, warning=FALSE, message=F}
+########################
+# Another approach...rather than MA crossover we use MA of the rate of change
+########################
+score_change <- scores[,14:16]
+score_change$Value <- Delt(score_EMA$Value)
+score_change$Value <- EMA(score_change$Value, n = 5)
+
+score_change_slow <- scores[,14:16]
+score_change_slow$Value <- EMA(score_change$Value, n = 20)
+
+
+
+# Now we set up the portfolio again
+risk_status <- scores[,14:16]
+risk_status$Value <- 0
+for(i in 50:nrow(risk_status)){
+  if (score_EMA$Value[i] < score_MA$Value[i]){
+    if (score_change$Value[i] > score_change_slow$Value[i]){
+      risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+  } else {
+    if (score_EMA$Value[i] > score_MA$Value[i]){
+       risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+   
+  }
+}
+
+
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Build the portfolio
+
+portfolio <- scores[,14:16]
+portfolio$Value <- 100
+for(i in 50:nrow(portfolio)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+   # if (score_EMA$Value[i-1] < score_MA$Value[i-1]){ # remove if no short exposure
+  #     portfolio$Value[i] <- portfolio$Value[i-1] * (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    #} else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    #}
+   
+  }
+}
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- scores[,14:16]
+
+QQQ_portfolio$Value <- 100
+for(i in 49:nrow(QQQ_portfolio)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+QQQ_portfolio$Label <- "QQQ Portfolio"
+
+# Rebind everything
+price_data <- price_data[,-2]
+price_data <- rbind(price_data,portfolio[-(1:49),],QQQ_portfolio[-(1:49),],score_EMA[-(1:20),],score_MA[-(1:50),],VXN_EMA[-(1:19),],VXN_MA[-(1:49),], score_change[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(QQQ_portfolio[-(1:49),], portfolio[-(1:49),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+#score_change <- scores[,14:16]
+#score_change$Value <- Delt(scores$Value)
+#score_change <- na.omit(score_change)
+
+
+
+```
+```{r}
+# Actual Sharpe Calc:
+sharpe_ratios <- data.frame(matrix(0,2,2))
+sharpe_ratios$X1[1] <- mean(Delt(portfolio$Value)[-1])/sd(Delt(portfolio$Value)[-1])
+sharpe_ratios$X2[1] <- mean(Delt(QQQ_portfolio$Value)[-1])/sd(Delt(QQQ_portfolio$Value)[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+# Actual Sharpe Calc:
+portfolio_returns <- data.frame(Delt(portfolio$Value)[-1])
+portfolio_returns_xts <- xts(portfolio_returns, portfolio$Date[-1])
+SharpeRatio.annualized(portfolio_returns_xts)
+
+QQQ_returns <- data.frame(Delt(QQQ_portfolio$Value)[-1])
+QQQ_returns_xts <- xts(QQQ_returns, QQQ_portfolio$Date[-1])
+SharpeRatio.annualized(QQQ_returns_xts)
+
+
+```
+
+```{r, warning=FALSE, message=F} 
+# Trying 2018-2022 only
+portfolio <- scores[,14:16]
+portfolio$Value <- 100
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+
+portfolio <- scores[,14:16]
+portfolio$Value <- 100
+
+
+for(i in which(portfolio$Date == start_date):which(portfolio$Date == end_date)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+   # if (score_EMA$Value[i-1] < score_MA$Value[i-1]){ # remove if no short exposure
+  #     portfolio$Value[i] <- portfolio$Value[i-1] * (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    #} else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    #}
+   
+  }
+}
+
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- scores[,14:16]
+
+QQQ_portfolio$Value <- 100
+
+
+for(i in which(portfolio$Date == start_date):which(portfolio$Date == end_date)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+
+QQQ_portfolio$Label <- "QQQ Portfolio"
+# Rebind everything
+score_change$Value <- score_change$Value *100
+score_change_slow$Value <- score_change_slow$Value *100
+
+price_data <- price_data[,-2]
+price_data <- rbind(score_change_slow[which(portfolio$Date == start_date):which(portfolio$Date == end_date),], portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],QQQ_portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_EMA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_MA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],VXN_EMA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],VXN_MA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_change[which(portfolio$Date == start_date):which(portfolio$Date == end_date),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+risk_signal <- QQQ_portfolio
+risk_signal$Value <- 1
+risk_signal$Value[which(risk_status$Value == 0)] <- 400
+risk_signal$Label <- "Risk Off"
+
+# Save for futrue use
+# ML_model <- risk_signal
+# ML_model$Value[which(TA_score_model$Value == 1)] <- 0
+# ML_model$Value[which(TA_score_model$Value == 400)] <- 1
+# ML_model$Label <- "TA Score Model"
+
+
+port_comp <- rbind(QQQ_portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),], portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],risk_signal[which(portfolio$Date == start_date):which(portfolio$Date == end_date),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+```
+```{r}
+
+# Compare the sharpe
+sharpe_ratios <- data.frame(matrix(0,2,2))
+sharpe_ratios$X1[1] <- mean(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])/sd(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+sharpe_ratios$X2[1] <- mean(Delt(QQQ_portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])/sd(Delt(QQQ_portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+# Actual Sharpe Calc:
+portfolio_returns <- data.frame(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+portfolio_returns_xts <- xts(portfolio_returns, portfolio$Date[which(portfolio$Date == (as.Date(start_date))):which(portfolio$Date == end_date)][-1])
+SharpeRatio.annualized(portfolio_returns_xts)
+
+QQQ_portfolio_returns <- data.frame(Delt(QQQ_portfolio$Value[which(QQQ_portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+QQQ_portfolio_returns_xts <- xts(QQQ_portfolio_returns, QQQ_portfolio$Date[which(QQQ_portfolio$Date == (as.Date(start_date))):which(portfolio$Date == end_date)][-1])
+SharpeRatio.annualized(QQQ_portfolio_returns_xts)
+
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Machine Learning Approach
+# use scores$value to try to predict VXN returns 
+library(BatchGetSymbols)
+library(quantmod)
+# Dates of Chronological Test Set
+start.date = "2018-01-04"
+end.date = "2022-03-28"
+# Last date of train set:
+last.date = as.Date(start.date)-1
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2001-02-01",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+VXN_data <- price_data[which(price_data$Label == "^VXN"),]
+VXN_data$`Daily Return` <- Delt(VXN_data$Value,type = "log")
+
+VXN_data_2001_2017 = VXN_data[complete.cases(VXN_data), ]
+#Re-run applying the technical indicators with 1 variation - we need to make sure they are all positive values to get log returns
+# all indicators related to the QQQ
+for (i in 1:ncol(indicator_df-2)){
+  if (min(indicator_df[,i]) < 0.0001){
+    indicator_df[,i] <- indicator_df[,i]+abs(min(indicator_df[,i]))+.00001
+  }
+}
+
+```
+
+
+```{r, warning=FALSE, message=FALSE} 
+library(glmnet)
+# Now we can apply the ML
+ml_set <- indicator_df[-1,]
+for (i in 1:11){
+  ml_set[,i] <- Delt(indicator_df[,i], type = "log")[-1]
+}
+
+### Vary the lag
+lag = 5
+ml_set <- cbind(ml_set[1:nrow(ml_set[1:((which(ml_set$`as.Date(QQQ_data$ref.date)` == last.date)-1)-lag),]),] ,VXN_data[(lag+1):nrow(VXN_data),])
+train=sample(nrow(ml_set),nrow(ml_set)*.8,replace=FALSE) #Train/Test split
+
+# remove unrelated columns
+ml_set <- ml_set[,-c(12,13,14,16,17)]
+
+train=sample(length(indicator_df),length(indicator_df)*.8,replace=FALSE) #Train/Test split
+
+VXN_returns = ml_set$`Daily Return`  
+output <- matrix(nrow = 12, ncol = 3)
+for(i in 1:(ncol(ml_set)-1)){
+  ml_test <- ml_set[,c(i,12)]
+  lin.mod = glm(ml_test$`Daily Return`~.,data = ml_test, subset=train)
+  output[i,1] <- colnames(ml_test)[1]
+  output[i,2] <- summary(lin.mod)$aic
+  lin.pred=predict(lin.mod, newdata = ml_test[-train,])
+  output[i,3] <- (sqrt(mean((lin.pred-ml_test$`Daily Return`[-train])^2)))
+  #print("P") - if you want to see p-values
+  #print(summary(lin.mod)$coefficients[4])
+}
+
+output <- as.data.frame(output)
+colnames(output) <- c("Indicator", "AIC", "RMSE")
+output[order(output$RMSE),]
+
+# for testing - add and remove indicators to see how the prediction accuracy changes
+ml_test <- ml_set
+lin.mod = glm(ml_test$`Daily Return`~.,data=ml_test,subset=train)
+
+lin.pred=predict(lin.mod,ml_test[-train,])
+sqrt(mean((lin.pred-ml_test$`Daily Return`[-train])^2))
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+ml_set <- ml_set[,-10]
+
+library(tree)
+tree.reg = tree(ml_set$`Daily Return`~.,data=ml_set,subset=train)
+
+
+sqrt(mean((ml_set$`Daily Return`[train] - predict(tree.reg, ml_set[train,]))^2)) #Training MSE
+
+y.tree.pred = predict(tree.reg, ml_set[-train,]) # Predict with the single regression tree
+tree.MSE = mean((ml_set$`Daily Return`[-train] - y.tree.pred)^2)
+sqrt(tree.MSE) #Test RMSE
+
+```
+```{r, warning=FALSE, message=FALSE}
+library(randomForest)
+
+
+ml_set <- ml_set
+rf.reg = randomForest(ml_set$`Daily Return`~.,data=ml_set,subset=train,mtry=3,ntree=300,importance=TRUE)
+rf.reg #Gives both the number of variables at each split but also provides out-of-bag estimate of error rate
+
+mean((ml_set$`Daily Return`[train] - predict(rf.reg, ml_set[train,]))^2)
+
+y.rf.pred = predict(rf.reg, ml_set[-train,]) # Predict with bagging
+rf.MSE = mean((ml_set$`Daily Return`[-train] - y.rf.pred)^2)
+sqrt(rf.MSE)
+
+#varImpPlot(rf.reg)
+#importance(rf.reg)
+#library(Boruta)
+#library(mlbench)
+#library(caret)
+#set.seed(111)
+#boruta <- Boruta(ml_set$`Daily Return` ~ ., data = ml_set, doTrace = 2, maxRuns = 500)
+##print(boruta)
+#plot(boruta, las = 2, cex.axis = 0.7)
+
+
+```
+
+```{r}
+# Using Score to predict VXN...not a good model, only predict positive values
+
+# tickers <- c("QQQ", "^VXN")
+# l.out <- BatchGetSymbols(tickers = tickers,
+# first.date = start.date,
+# last.date = end.date, do.cache=FALSE, be.quiet = TRUE)
+# 
+# price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+# colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+# VXN_data <- price_data[which(price_data$Label == "^VXN"),]
+# VXN_data$`Daily Return` <- Delt(VXN_data$Value,type = "log")
+# QQQ_data <- price_data[which(price_data$Label == "QQQ"),]
+# QQQ_data$`Daily Return`<- Delt(QQQ_data$Value)
+# 
+# ml_set <- indicator_df[-1,]
+# for (i in 1:11){
+#   ml_set[,i] <- Delt(indicator_df[,i], type = "log")[-1]
+# }
+# 
+# 
+# ml_set <- cbind(ml_set[(which(ml_set$`as.Date(QQQ_data$ref.date)` == start.date)+1):(which(ml_set$`as.Date(QQQ_data$ref.date)` == end.date)-lag),],VXN_data[(lag+1):nrow(VXN_data),])
+# 
+# # remove unrelated columns
+# ml_test <- ml_set[,-c(12,13,14,16,17)]
+# 
+# y.rf.pred = predict(rf.reg, ml_test) 
+# 
+# result <- data.frame(y.rf.pred)
+# 
+# seven <- quantile(VXN_data_2001_2017$`Daily Return`, probs = seq(0, 1, 1/20))[17]
+# 
+# 
+# result$direction <- (result$y.rf.pred >seven) +0 # here you can change the strength of signal
+# result$date <- ml_set$`as.Date(QQQ_data$ref.date)`
+# vol_expected <- data.frame(result[which(result$direction == 1),])
+#   
+# #vol_compression <- data.frame(result[which(result$y.rf.pred < -0.001),])
+# vol_expected$date <- as.Date(result[which(result$direction == 1),3])
+# #vol_compression$date <- as.Date(result[which(result$y.rf.pred < -0.001),3])
+# ###########################################################################################################################
+# ### This modifies for how far out you begin to go risk-off after the signal is triggered. Ex: 5 means 5 days after the signal is triggered go risk off
+# #############################################################################
+# when =  1
+# for (i in 1:nrow(vol_expected)){
+#   vol_expected$date[i] <- vol_expected$date[i]+when
+# }
+# #for (i in 1:nrow(vol_compression )){
+#  # vol_compression$date[i] <- vol_compression$date[i]+when
+# #}
+# 
+# QQQ_data$VXX_direction_pred <- 0
+# 
+# for(i in 1:nrow(QQQ_data)){
+#   for (j in 1: nrow(vol_expected)){
+#     if(as.Date(QQQ_data$Date[i]) == as.Date(vol_expected$date[j])){
+#     QQQ_data$VXX_direction_pred[i] <- 1
+#     }
+#   }
+# }
+# 
+# QQQ_data$port <- 100
+# QQQ_data$QQQ_port <- 100
+# 
+# ###########################################################################################################################
+# ### This modifies for how many days the model goes risk-off once the signal gets triggered, change 5 to your desired period
+# #############################################################################
+# counter = 0;
+# how_long = 5
+# for(i in 1:nrow(QQQ_data)){
+#   if (i != nrow(QQQ_data)){
+#   if(QQQ_data$VXX_direction_pred[i] == 1){
+#     if (counter != how_long){
+#       QQQ_data$VXX_direction_pred[i+1] <- 1
+#       counter = counter + 1
+#     } else {
+#       counter = 0
+#       QQQ_data$VXX_direction_pred[i+1] <- 0
+#     }
+#   }
+#   }
+# }
+# 
+# # volcompression
+# counter = 0;
+# #for (i in 1:nrow(QQQ_data)){
+# #  if(QQQ_data$VXX_direction_pred[i] == 1){
+# #    for (j in 1:nrow(vol_compression)){
+# #     if(as.Date(QQQ_data$Date[i]) == as.Date(vol_compression$date[j])){
+# #       for(k in 1:2){
+# #          QQQ_data$VXX_direction_pred[k] <- 0
+# #       }
+# #       i = k
+# #       }
+# #    }
+# #  }
+# #}
+# 
+# QQQ_data$port_ret <- QQQ_data$`Daily Return`
+# 
+# 
+# for(i in 1:nrow(QQQ_data)){
+#   if(QQQ_data$VXX_direction_pred[i] == 1){
+#     QQQ_data$port_ret[i] <- 0
+#   }
+# }
+# 
+# for(i in 3:nrow(QQQ_data)){
+#   QQQ_data$QQQ_port[i] <- QQQ_data$QQQ_port[i-1] * (1+QQQ_data$`Daily Return`[i-1])
+#   QQQ_data$port[i] <- QQQ_data$port[i-1] * (1+QQQ_data$port_ret[i-1])
+# }
+# 
+# 
+# final_result <- cbind(QQQ_data$port,QQQ_data$QQQ_port, QQQ_data$VXX_direction_pred)
+# rownames(final_result) <- QQQ_data$Date
+# colnames(final_result) <- c("Portfolio Return", "QQQ Return", "Risk Signal")
+# 
+# final_result <- data.frame(final_result)
+# final_result$date <- as.Date(QQQ_data$Date)
+# final_result$Risk.Signal <- final_result$Risk.Signal * 300
+# 
+# 
+# sharpe_ratios <- data.frame(as.matrix(0,2,2))
+# sharpe_ratios$as.matrix.0..2..2.[1] <- (mean(QQQ_data$port_ret[-1]))/sd(QQQ_data$port_ret[-1])
+# sharpe_ratios$as.matrix.0..2..3.[1] <-(mean(QQQ_data$`Daily Return`[-1]))/sd(QQQ_data$`Daily Return`[-1])
+# colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+# sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+# colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+# sharpe_ratios_annualized[1,]
+# 
+# library(ggplot2)
+# library(reshape2)
+# 
+# 
+# final_result <- melt(final_result, id = "date")
+# 
+# 
+# ggplot(final_result, aes(x = final_result$date, y = final_result$value, color = variable, group = final_result$variable))+geom_line()+ scale_x_date(date_minor_breaks = "1 day") + labs(color = "Portfolio") + xlab("Date") + ylab("Portfolio Value") + ggtitle("Model Performance vs. QQQ") 
+```
+```{r, warning=FALSE, message=FALSE}
+# Machine Learning Approach with VXN MA
+# use scores$value to try to predict VXX returns 
+library(BatchGetSymbols)
+library(quantmod)
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2001-02-01",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+VXN_data <- price_data[which(price_data$Label == "^VXN"),]
+
+### Dictate the length of the MA here
+MA_length = 20
+VXN_data$`Daily Return` <- Delt(EMA(VXN_data$Value, n = MA_length),type = "log")
+VXN_data = VXN_data[complete.cases(VXN_data), ]
+VXN_data_2001_2017 = VXN_data
+
+#Re-run applying the technical indicators with 1 variation - we need to make sure they are all positive values to get log returns
+# all indicators related to the QQQ
+for (i in 1:ncol(indicator_df-2)){
+  if (min(indicator_df[,i]) < 0.0001){
+    indicator_df[,i] <- indicator_df[,i]+abs(min(indicator_df[,i]))+.00001
+  }
+}
+
+
+library(glmnet)
+# Now we can apply the ML
+ml_set <- indicator_df[-c(1:MA_length),]
+for (i in 1:11){
+  ml_set[,i] <- Delt(indicator_df[-c(1:MA_length),i], type = "log")
+}
+ml_set <- ml_set[-1,]
+
+### Vary the lag
+lag = 5
+
+ml_set <- cbind(ml_set[1:nrow(ml_set[1:((which(ml_set$`as.Date(QQQ_data$ref.date)` == last.date)-1)-lag),]),] ,VXN_data[(lag+1):nrow(VXN_data),])
+
+# remove unrelated columns
+ml_set <- ml_set[,-c(12,13,14,16,17)]
+
+train=sample(nrow(ml_set),nrow(ml_set)*.8,replace=FALSE) #Train/Test split
+
+VXN_returns = ml_set$`Daily Return`  
+output <- matrix(nrow = 12, ncol = 3)
+for(i in 1:(ncol(ml_set)-1)){
+  ml_test <- ml_set[,c(i,12)]
+  lin.mod = glm(ml_test$`Daily Return`~.,data = ml_test, subset=train)
+  output[i,1] <- colnames(ml_test)[1]
+  output[i,2] <- summary(lin.mod)$aic
+  lin.pred=predict(lin.mod, newdata = ml_test[-train,])
+  output[i,3] <- (sqrt(mean((lin.pred-ml_test$`Daily Return`[-train])^2)))
+  #print("P") - if you want to see p-values
+  #print(summary(lin.mod)$coefficients[4])
+}
+
+output <- as.data.frame(output)
+colnames(output) <- c("Indicator", "AIC", "RMSE")
+output[order(output$RMSE),]
+
+```
+
+```{r}
+# for testing - add and remove indicators to see how the prediction accuracy changes
+
+ml_test <- ml_set[,c(1,5,8,10,12)]
+# ml_test[,1] <- ml_test[,1] * 1000 - for scaling
+lin.mod = glm(ml_test$`Daily Return`~.,data=ml_test,subset=train)
+summary(lin.mod)
+
+lin.pred=predict(lin.mod,ml_test[-train,])
+sqrt(mean((lin.pred-ml_test$`Daily Return`[-train])^2))
+
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+
+
+library(tree)
+tree.reg = tree(ml_test$`Daily Return`~.,data=ml_test,subset=train)
+
+
+mean((ml_test$`Daily Return`[train] - predict(tree.reg, ml_test[train,]))^2) #Training MSE
+
+y.tree.pred = predict(tree.reg, ml_test[-train,]) # Predict with the single regression tree
+tree.MSE = mean((ml_test$`Daily Return`[-train] - y.tree.pred)^2)
+sqrt(tree.MSE) #Test MSE
+
+
+```
+```{r, warning=FALSE, message=FALSE}
+library(randomForest)
+
+ml_test <- ml_set[]
+
+rf.reg = randomForest(ml_test$`Daily Return`~.,data=ml_test,subset=train,mtry=3,ntree=300,importance=TRUE)
+rf.reg #Gives both the number of variables at each split but also provides out-of-bag estimate of error rate
+
+mean((ml_test$`Daily Return`[train] - predict(rf.reg, ml_test[train,]))^2)
+
+y.rf.pred = predict(rf.reg, ml_test[-train,]) # Predict with bagging
+rf.MSE = mean((ml_test$`Daily Return`[-train] - y.rf.pred)^2)
+sqrt(rf.MSE)
+
+#varImpPlot(rf.reg)
+#importance(rf.reg))
+#library(Boruta)
+#library(mlbench)
+#library(caret)
+#set.seed(111)
+#boruta <- Boruta(ml_set$`Daily Return` ~ ., data = ml_set, doTrace = 2, maxRuns = 500)
+#print(boruta)
+#plot(boruta, las = 2, cex.axis = 0.7)
+
+
+```
+
+```{r}
+
+# Finally we try the logistic regression!
+ml_test <- ml_set[]
+
+ml_test$direction <- 0
+ml_test$direction = (ml_test$`Daily Return` > 0)+0
+
+ml_test <- ml_test[,-(ncol(ml_test)-1)]
+logistic.reg = glm(ml_test$direction ~ . , data=ml_test , subset=train , family=binomial) # Fit logistic regression [family=binomial]
+summary(logistic.reg)
+
+logistic.probs = predict(logistic.reg , newdata=ml_test[-train,] , type="response") # Compute probabilities
+
+# Use probabilities to make predictions
+dir.logistic.pred=rep(0,length(ml_test$direction[-train])) # Create repeated vector of "0"
+dir.logistic.pred[logistic.probs>.5] = 1 # Predict "1" if logistic regression gives greater probability to "1"
+
+# Evaluate the accuracy
+logistic.acc = mean(dir.logistic.pred==ml_test$direction[-train]) # Directly compute the accuracy
+logistic.acc
+
+# Confusion matrix
+table(dir.logistic.pred , ml_test$direction[-train]) 
+
+```
+
+
+```{r}
+
+
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = start.date,
+last.date = end.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+VXN_data <- price_data[which(price_data$Label == "^VXN"),]
+QQQ_data <- price_data[which(price_data$Label == "QQQ"),]
+returns_data <- cbind(VXN_data, QQQ_data)
+
+
+returns_data[,2] <- Delt(EMA(VXN_data$Value, n = MA_length),type = "log")
+returns_data = returns_data[complete.cases(VXN_data), ]
+
+QQQ_data <- returns_data[,5:8]
+QQQ_data$`Daily Return`<- Delt(QQQ_data$Value)
+
+
+ml_set <- indicator_df[-1,]
+for (i in 1:11){
+  ml_set[,i] <- Delt(indicator_df[,i], type = "log")[-1]
+}
+
+
+
+ml_set <- cbind(ml_set[(which(ml_set$`as.Date(QQQ_data$ref.date)` == start.date)+1):(which(ml_set$`as.Date(QQQ_data$ref.date)` == end.date)-lag),],VXN_data[(lag+1):nrow(VXN_data),])
+
+
+# remove unrelated columns
+# ml_test <- ml_set[,-c(12,13,14,16,17)]
+
+ml_test <- ml_set[,]
+y.rf.pred = predict(rf.reg, ml_test) 
+
+result <- data.frame(y.rf.pred)
+
+####### Applying MA to prediction approach
+#result$MA <- EMA(result$y.rf.pred, n = 15)
+#fourth_quantile <- quantile(result$MA[25:nrow(result)], pros = seq(0, 1, 1/10))[4]
+#first_quantile <- quantile(result$MA[25:nrow(result)], pros = seq(0, 1, 1/10))[1]
+#result$direction <- (result$MA >0 ) + 0 # here you can change the strength of signal
+#result$date <- ml_set$`as.Date(QQQ_data$ref.date)`
+
+#vol_expected <- data.frame(result[which(result$direction > fourth_quantile),])
+#vol_expected$date <- as.Date(result[which(result$direction > fourth_quantile),4])
+#vol_compression <- data.frame(result[which(result$y.rf.pred < first_quantile),])
+#vol_compression$date <- as.Date(result[which(result$y.rf.pred < first_quantile),4])
+
+
+########### the prior approach ############
+# We add quantiles to assess strength of prediction
+high_threshold <- quantile(VXN_data_2001_2017$`Daily Return`, probs = seq(0, 1, 1/20))[17]
+low_threshold <- quantile(VXN_data_2001_2017$`Daily Return`, probs = seq(0, 1, 1/20))[5]
+
+result$direction <- (result$y.rf.pred > high_threshold) + 0 # here you can change the strength of signal
+result$date <- ml_set$`as.Date(QQQ_data$ref.date)`
+vol_expected <- data.frame(result[which(result$direction == 1),])
+vol_compression <- data.frame(result[which(result$y.rf.pred < low_threshold),])
+vol_expected$date <- as.Date(result[which(result$direction == 1),3])
+vol_compression$date <- as.Date(result[which(result$y.rf.pred < low_threshold),3])
+
+
+###########################################################################################################################
+### This modifies for how far out you begin to go risk-off after the signal is triggered. Ex: 5 means 5 days after the signal is triggered go risk off
+#############################################################################
+when =  1
+for (i in 1:nrow(vol_expected)){
+  vol_expected$date[i] <- vol_expected$date[i]+when
+}
+for (i in 1:nrow(vol_compression )){
+# vol_compression$date[i] <- vol_compression$date[i]+when
+}
+
+QQQ_data$VXX_direction_pred <- 0
+
+for(i in 1:nrow(QQQ_data)){
+  for (j in 1: nrow(vol_expected)){
+    if(as.Date(QQQ_data$Date[i]) == as.Date(vol_expected$date[j])){
+    QQQ_data$VXX_direction_pred[i] <- 1
+    }
+  }
+}
+
+QQQ_data$port <- 100
+QQQ_data$QQQ_port <- 100
+
+###########################################################################################################################
+### This modifies for how many days the model goes risk-off once the signal gets triggered, change 5 to your desired period
+#############################################################################
+counter = 0;
+how_long = 10
+for(i in 1:nrow(QQQ_data)){
+  if (i != nrow(QQQ_data)){
+  if(QQQ_data$VXX_direction_pred[i] == 1){
+    if (counter != how_long){
+      QQQ_data$VXX_direction_pred[i+1] <- 1
+      counter = counter + 1
+    } else {
+      counter = 0
+      QQQ_data$VXX_direction_pred[i+1] <- 0
+    }
+  }
+  }
+}
+
+how_long = 10
+counter = 0;
+#for (i in 2:nrow(QQQ_data)){
+# if(QQQ_data$VXX_direction_pred[i-1] == 1){
+#  for (j in 1:nrow(vol_compression)){
+##     if(as.Date(QQQ_data$Date[i]) == as.Date(vol_compression$date[j])){
+#        counter = 0;
+#      while (counter <= how_long && i < nrow(QQQ_data)){
+#           QQQ_data$VXX_direction_pred[i] <- 0 # toggle whether you want risk off here
+#           counter = counter + 1
+#           i = i+1
+#        }
+#        
+#      }
+#    }
+# }
+#}
+
+
+QQQ_data$port_ret <- QQQ_data$`Daily Return`
+
+
+for(i in 1:nrow(QQQ_data)){
+  if(QQQ_data$VXX_direction_pred[i] == 1){
+    QQQ_data$port_ret[i] <- 0
+  }
+}
+
+for(i in 3:nrow(QQQ_data)){
+  QQQ_data$QQQ_port[i] <- QQQ_data$QQQ_port[i-1] * (1+QQQ_data$`Daily Return`[i-1])
+  QQQ_data$port[i] <- QQQ_data$port[i-1] * (1+QQQ_data$port_ret[i-1])
+}
+
+####### Save for future use
+ML_Model <- QQQ_data
+ML_Model$Value <- QQQ_data$VXX_direction_pred
+ML_Model$Label <- "ML Model"
+ML_Model <- ML_Model[,c(1,3,4)]
+
+
+final_result <- cbind(QQQ_data$port,QQQ_data$QQQ_port, QQQ_data$VXX_direction_pred)
+rownames(final_result) <- QQQ_data$Date
+colnames(final_result) <- c("Portfolio Return", "QQQ Return", "Risk Signal")
+
+final_result <- data.frame(final_result)
+final_result$date <- as.Date(QQQ_data$Date)
+final_result$Risk.Signal <- final_result$Risk.Signal * 300
+
+
+sharpe_ratios <- data.frame(as.matrix(0,2,2))
+sharpe_ratios$as.matrix.0..2..2.[1] <- (mean(QQQ_data$port_ret[-1]))/sd(QQQ_data$port_ret[-1])
+sharpe_ratios$as.matrix.0..2..3.[1] <-(mean(QQQ_data$`Daily Return`[-1]))/sd(QQQ_data$`Daily Return`[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+library(ggplot2)
+library(reshape2)
+
+final_result <- melt(final_result, id = "date")
+
+ggplot(final_result, aes(x = final_result$date, y = final_result$value, color = variable, group = final_result$variable))+geom_line()+ scale_x_date(date_minor_breaks = "1 day") + labs(color = "Portfolio") + xlab("Date") + ylab("Portfolio Value") + ggtitle("RandomForest Model - Technical Variables vs. Change in VXN 20-day EMA") 
+```
+
+```{r}
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = start.date,
+last.date = end.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+VXN_data <- price_data[which(price_data$Label == "^VXN"),]
+QQQ_data <- price_data[which(price_data$Label == "QQQ"),]
+returns_data <- cbind(VXN_data, QQQ_data)
+
+
+returns_data[,2] <- Delt(EMA(VXN_data$Value, n = MA_length),type = "log")
+returns_data = returns_data[complete.cases(VXN_data), ]
+
+QQQ_data <- returns_data[,5:8]
+QQQ_data$`Daily Return`<- Delt(QQQ_data$Value)
+
+
+ml_set <- indicator_df[-1,]
+for (i in 1:11){
+  ml_set[,i] <- Delt(indicator_df[,i], type = "log")[-1]
+}
+
+
+
+ml_set <- cbind(ml_set[(which(ml_set$`as.Date(QQQ_data$ref.date)` == start.date)+1):(which(ml_set$`as.Date(QQQ_data$ref.date)` == end.date)-lag),],VXN_data[(lag+1):nrow(VXN_data),])
+
+
+
+# remove unrelated columns
+# ml_test <- ml_set[,-c(12,13,14,16,17)]
+
+ml_test <- ml_set[,]
+y.rf.pred = predict(rf.reg, ml_test) 
+
+result <- data.frame(y.rf.pred)
+
+####### Applying MA to prediction approach
+result$MA <- EMA(result$y.rf.pred, n = 15)
+fourth_quantile <- quantile(VXN_data_2001_2017$`Daily Return`, pros = seq(0, 1, 1/10))[4]
+first_quantile <- quantile(VXN_data_2001_2017$`Daily Return`, pros = seq(0, 1, 1/10))[1]
+result$direction <- (result$MA >0 ) + 0 # here you can change the strength of signal
+result$date <- ml_set$`as.Date(QQQ_data$ref.date)`
+
+vol_expected <- data.frame(result[which(result$direction > fourth_quantile),])
+vol_expected$date <- as.Date(result[which(result$direction > fourth_quantile),4])
+vol_compression <- data.frame(result[which(result$y.rf.pred < first_quantile),])
+vol_compression$date <- as.Date(result[which(result$y.rf.pred < first_quantile),4])
+
+
+
+###########################################################################################################################
+### This modifies for how far out you begin to go risk-off after the signal is triggered. Ex: 5 means 5 days after the signal is triggered go risk off
+#############################################################################
+when =  1
+for (i in 1:nrow(vol_expected)){
+  vol_expected$date[i] <- vol_expected$date[i]+when
+}
+#for (i in 1:nrow(vol_compression )){
+# vol_compression$date[i] <- vol_compression$date[i]+when
+#}
+
+QQQ_data$VXX_direction_pred <- 0
+
+for(i in 1:nrow(QQQ_data)){
+  for (j in 1: nrow(vol_expected)){
+    if(as.Date(QQQ_data$Date[i]) == as.Date(vol_expected$date[j])){
+    QQQ_data$VXX_direction_pred[i] <- 1
+    }
+  }
+}
+
+QQQ_data$port <- 100
+QQQ_data$QQQ_port <- 100
+
+###########################################################################################################################
+### This modifies for how many days the model goes risk-off once the signal gets triggered, change 5 to your desired period
+#############################################################################
+counter = 0;
+how_long = 10
+for(i in 1:nrow(QQQ_data)){
+  if (i != nrow(QQQ_data)){
+  if(QQQ_data$VXX_direction_pred[i] == 1){
+    if (counter != how_long){
+      QQQ_data$VXX_direction_pred[i+1] <- 1
+      counter = counter + 1
+    } else {
+      counter = 0
+      QQQ_data$VXX_direction_pred[i+1] <- 0
+    }
+  }
+  }
+}
+
+how_long = 10
+counter = 0;
+# for (i in 2:nrow(QQQ_data)){
+#  if(QQQ_data$VXX_direction_pred[i-1] == 1){
+#   for (j in 1:nrow(vol_compression)){
+#      if(as.Date(QQQ_data$Date[i]) == as.Date(vol_compression$date[j])){
+#       counter = 0;
+#       while (counter <= how_long && i < nrow(QQQ_data)){
+#            QQQ_data$VXX_direction_pred[i] <- 0 # toggle whether you want risk off here
+#            counter = counter + 1
+#            i = i+1
+#         }
+#         
+#     }
+#     }
+#  }
+# }
+
+
+QQQ_data$port_ret <- QQQ_data$`Daily Return`
+
+
+for(i in 1:nrow(QQQ_data)){
+  if(QQQ_data$VXX_direction_pred[i] == 1){
+    QQQ_data$port_ret[i] <- 0
+  }
+}
+
+for(i in 3:nrow(QQQ_data)){
+  QQQ_data$QQQ_port[i] <- QQQ_data$QQQ_port[i-1] * (1+QQQ_data$`Daily Return`[i-1])
+  QQQ_data$port[i] <- QQQ_data$port[i-1] * (1+QQQ_data$port_ret[i-1])
+}
+
+
+
+final_result <- cbind(QQQ_data$port,QQQ_data$QQQ_port, QQQ_data$VXX_direction_pred)
+rownames(final_result) <- QQQ_data$Date
+colnames(final_result) <- c("Portfolio Return", "QQQ Return", "Risk Signal")
+
+final_result <- data.frame(final_result)
+final_result$date <- as.Date(QQQ_data$Date)
+final_result$Risk.Signal <- final_result$Risk.Signal * 300
+
+####### Save for future use
+ML_MA_Model <- QQQ_data
+ML_MA_Model$Value <- final_result$Risk.Signal/300
+ML_MA_Model$Label <- "ML MA Model"
+ML_MA_Model <- ML_MA_Model[,c(1,3,4)]
+####### Save for future use
+
+sharpe_ratios <- data.frame(as.matrix(0,2,2))
+sharpe_ratios$as.matrix.0..2..2.[1] <- (mean(QQQ_data$port_ret[-1]))/sd(QQQ_data$port_ret[-1])
+sharpe_ratios$as.matrix.0..2..3.[1] <-(mean(QQQ_data$`Daily Return`[-1]))/sd(QQQ_data$`Daily Return`[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+library(ggplot2)
+library(reshape2)
+
+final_result <- melt(final_result, id = "date")
+
+ggplot(final_result, aes(x = final_result$date, y = final_result$value, color = variable, group = final_result$variable))+geom_line()+ scale_x_date(date_minor_breaks = "1 day") + labs(color = "Portfolio") + xlab("Date") + ylab("Portfolio Value") + ggtitle("RandomForest Model - Technical Variables vs. Change in VXN 20-Day EMA") 
+
+
+```

@@ -1,0 +1,765 @@
+---
+title: "Data Gathering"
+author: "Marc Vitenzon"
+date: "11/14/2021"
+output: pdf_document
+---
+
+```{r}
+library(BatchGetSymbols)
+library(data.table)
+
+
+#Step One: Get Macro Data
+macro_indicators <- data.frame(read.csv(file = "MacroIndicators2.csv"))
+# Fill NAs
+for (i in 2:ncol(macro_indicators)){
+ macro_indicators[i] <- as.numeric(nafill(macro_indicators[,i], type = "locf"))
+}
+
+macro_indicators$Date <- as.Date(macro_indicators[,1], "%m/%d/%Y")
+macro_indicators <- macro_indicators[,-1]
+
+# Data set for QQQ only 
+tickers <- "QQQ"
+first.date <- as.Date(macro_indicators$Date[1])
+last.date <- as.Date(macro_indicators$Date[nrow(macro_indicators)])
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+QQQ_data <- data.frame(l.out$df.tickers)
+
+# Data set for price of QQQ and VXN only
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = macro_indicators$Date[1],
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Data set including Open, Close, and Volume for both
+complete_data <- data.frame(l.out$df.tickers)
+
+
+
+######## Optional #######################
+# Data set of QQQ constituents
+# sp500 <- GetSP500Stocks() # constituents vary over time so this is a not a perfect implementation
+# tickers <- c(sp500$Tickers)
+# l.out <- BatchGetSymbols(tickers = tickers,
+# first.date = first.date,
+# last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+# constituents <- l.out$df.tickers
+
+
+```
+
+```{r}
+# Apply the indicators
+
+library(TTR)
+library(quantmod)
+library(corrplot)
+
+corrplot(cor(macro_indicators[,1:ncol(macro_indicators)-1], use = "complete.obs"), method = "pie")
+
+
+```
+```{r}
+# Apply the scoring system:
+
+scores <- data.frame(matrix(nrow = nrow(macro_indicators), ncol = ncol(macro_indicators)+2))
+colnames(scores) <- c("BFCIUS Index",
+"PCUSEQTR Index",
+"OPCVTPCR Index",
+"TRADCADS Index",
+'SUM INX Index',
+"SPXVOLC Index",
+"RVOL Index",
+"COR3M Index",
+"CMDIBASS Index",
+"EUR Curncy",
+"MOVE Index",
+"OPCVTOTC Index",
+"OPCVNQP Index",
+"GFSIFFND Index",
+"GFSIRMKT Index",
+"GFSIRSOL Index",
+"GFSIRLIQ Index",
+"NWHLNYHI Index",
+"NWHLNDHI Index",
+"TRADPAUS Index",
+"HFRXED Index",
+"NEIXCTA Index",
+"HFRXEH Index",
+"NQBUY Index",
+"H15X10YR Index", "Date", "Label" , "Value")
+
+## Moving Average Scoring
+
+# 20 and 50 Indicators 
+scores$`BFCIUS Index`[EMA(macro_indicators[,1], n = 20) >= SMA(macro_indicators[,1], n = 50)] <- 10
+scores$`BFCIUS Index`[EMA(macro_indicators[,1], n = 20) < SMA(macro_indicators[,1], n = 50)] <- -10
+
+scores$`CMDIBASS Index`[EMA(macro_indicators[,9], n = 20) >= SMA(macro_indicators[,9], n = 50)] <- 5
+scores$`CMDIBASS Index`[EMA(macro_indicators[,9], n = 20) < SMA(macro_indicators[,9], n = 50)] <- -5
+
+scores$`EUR Curncy`[EMA(macro_indicators[,10], n = 20) >= SMA(macro_indicators[,10], n = 50)] <- 5
+scores$`EUR Curncy`[EMA(macro_indicators[,10], n = 20) < SMA(macro_indicators[,10], n = 50)] <- -5
+
+scores$`MOVE Index`[EMA(macro_indicators[,11], n = 20) >= SMA(macro_indicators[,11], n = 50)] <- 5
+scores$`MOVE Index`[EMA(macro_indicators[,11], n = 20) < SMA(macro_indicators[,11], n = 50)] <- -5
+
+scores$`NWHLNYHI Index`[EMA(macro_indicators[,18], n = 20) >= SMA(macro_indicators[,18], n = 50)] <- 5
+scores$`NWHLNYHI Index`[EMA(macro_indicators[,18], n = 20) < SMA(macro_indicators[,18], n = 50)] <- -5
+
+scores$`NWHLNDHI Index`[EMA(macro_indicators[,19], n = 20) >= SMA(macro_indicators[,19], n = 50)] <- 5
+scores$`NWHLNDHI Index`[EMA(macro_indicators[,19], n = 20) < SMA(macro_indicators[,19], n = 50)] <- -5
+
+scores$`TRADPAUS Index`[EMA(macro_indicators[,20], n = 20) >= SMA(macro_indicators[,20], n = 50)] <- 5
+scores$`TRADPAUS Index`[EMA(macro_indicators[,20], n = 20) < SMA(macro_indicators[,20], n = 50)] <- -5
+
+scores$`NQBUY Index`[EMA(macro_indicators[,24], n = 20) >= SMA(macro_indicators[,24], n = 50)] <- 5
+scores$`NQBUY Index`[EMA(macro_indicators[,24], n = 20) < SMA(macro_indicators[,24], n = 50)] <- -5
+
+scores$`H15X10YR Index`[EMA(macro_indicators[,25], n = 20) >= SMA(macro_indicators[,25], n = 50)] <- 0
+scores$`H15X10YR Index`[EMA(macro_indicators[,25], n = 20) < SMA(macro_indicators[,25], n = 50)] <- 0
+
+# 9 and 20
+scores$`PCUSEQTR Index`[EMA(macro_indicators[,2], n = 9) >= SMA(macro_indicators[,2], n = 20)] <- 5
+scores$`PCUSEQTR Index`[EMA(macro_indicators[,2], n = 9) < SMA(macro_indicators[,2], n = 20)] <- -5
+
+scores$`OPCVTPCR Index`[EMA(macro_indicators[,3], n = 9) >= SMA(macro_indicators[,3], n = 20)] <- 5
+scores$`OPCVTPCR Index`[EMA(macro_indicators[,3], n = 9) < SMA(macro_indicators[,3], n = 20)] <- -5
+
+scores$`SPXVOLC Index`[EMA(macro_indicators[,6], n = 9) >= SMA(macro_indicators[,6], n = 20)] <- 5
+scores$`SPXVOLC Index`[EMA(macro_indicators[,6], n = 9) < SMA(macro_indicators[,6], n = 20)] <- -5
+
+scores$`RVOL Index`[EMA(macro_indicators[,7], n = 9) < SMA(macro_indicators[,7], n = 20)] <- 5 # vol is inverse
+scores$`RVOL Index`[EMA(macro_indicators[,7], n = 9) >= SMA(macro_indicators[,7], n = 20)] <- -5
+
+scores$`OPCVTOTC Index`[EMA(macro_indicators[,12], n = 9) >= SMA(macro_indicators[,12], n = 20)] <- 5
+scores$`OPCVTOTC Index`[EMA(macro_indicators[,12], n = 9) < SMA(macro_indicators[,12], n = 20)] <- -5
+
+scores$`OPCVNQP Index`[EMA(macro_indicators[,13], n = 9) >= SMA(macro_indicators[,13], n = 20)] <- 5
+scores$`OPCVNQP Index`[EMA(macro_indicators[,13], n = 9) < SMA(macro_indicators[,13], n = 20)] <- -5
+
+scores$`GFSIFFND Index`[EMA(macro_indicators[,14], n = 9) >= SMA(macro_indicators[,14], n = 20)] <- 5
+scores$`GFSIFFND Index`[EMA(macro_indicators[,14], n = 9) < SMA(macro_indicators[,14], n = 20)] <- -5
+
+scores$`GFSIRMKT Index`[EMA(macro_indicators[,15], n = 9) >= SMA(macro_indicators[,15], n = 20)] <- 5
+scores$`GFSIRMKT Index`[EMA(macro_indicators[,15], n = 9) < SMA(macro_indicators[,15], n = 20)] <- -5
+
+scores$`GFSIRSOL Index`[EMA(macro_indicators[,16], n = 9) >= SMA(macro_indicators[,16], n = 20)] <- 5
+scores$`GFSIRSOL Index`[EMA(macro_indicators[,16], n = 9) < SMA(macro_indicators[,16], n = 20)] <- -5
+
+scores$`GFSIRLIQ Index`[EMA(macro_indicators[,17], n = 9) >= SMA(macro_indicators[,17], n = 20)] <- 5
+scores$`GFSIRLIQ Index`[EMA(macro_indicators[,17], n = 9) < SMA(macro_indicators[,17], n = 20)] <- -5
+
+scores$`HFRXED Index`[EMA(macro_indicators[,21], n = 9) >= SMA(macro_indicators[,21], n = 20)] <- 5
+scores$`HFRXED Index`[EMA(macro_indicators[,21], n = 9) < SMA(macro_indicators[,21], n = 20)] <- -5
+
+scores$`NEIXCTA Index`[EMA(macro_indicators[,22], n = 9) >= SMA(macro_indicators[,22], n = 20)] <- 5
+scores$`NEIXCTA Index`[EMA(macro_indicators[,22], n = 9) < SMA(macro_indicators[,22], n = 20)] <- -5
+
+scores$`HFRXEH Index`[EMA(macro_indicators[,23], n = 9) >= SMA(macro_indicators[,23], n = 20)] <- 5
+scores$`HFRXEH Index`[EMA(macro_indicators[,23], n = 9) < SMA(macro_indicators[,23], n = 20)] <- -5
+
+
+# 5 and 10
+scores$`TRADCADS Index`[EMA(macro_indicators[,4], n = 5) >= SMA(macro_indicators[,4], n = 10)] <- 5
+scores$`TRADCADS Index`[EMA(macro_indicators[,4], n = 5) < SMA(macro_indicators[,4], n = 10)] <- -5
+
+scores$`SUM INX Index`[EMA(macro_indicators[,5], n = 5) >= SMA(macro_indicators[,5], n = 10)] <- 5
+scores$`SUM INX Index`[EMA(macro_indicators[,5], n = 5) < SMA(macro_indicators[,5], n = 10)] <- -5
+
+scores$`COR3M Index`[EMA(macro_indicators[,8], n = 5) >= SMA(macro_indicators[,8], n = 10)] <- 5
+scores$`COR3M Index`[EMA(macro_indicators[,8], n = 5) < SMA(macro_indicators[,8], n = 10)] <- -5
+
+# Total Score
+for (i in 1:nrow(scores)){
+  scores$Value[i] <- sum(scores[i,1:25])
+}
+
+scores$Label <- "Score"
+scores$Date <- macro_indicators$Date
+```
+
+```{r, warning=FALSE, message=FALSE}
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Compare score with price action
+price_data <- price_data[,-2] # removing returns data
+#score_time_series <- scores[-1,14:16]
+
+# Smooth score with an EMA
+score_EMA <- scores[,c(28,26,27)]
+score_EMA$Value <- EMA(scores$Value, n = 20)
+score_EMA$Label <- "Score 20 EMA"
+
+# adding an MA for the crossover
+score_MA <- scores[,c(28,26,27)]
+score_MA$Value <- EMA(scores$Value, n = 50)
+score_MA$Label <- "Score 50 MA"
+
+price_data <- rbind(price_data, score_EMA[-(1:25),],score_MA[-(1:25),]) # binding score, date, and label and removing first data point to match dates
+
+
+library(ggplot2)
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+```
+```{r, warning=FALSE, message=FALSE}
+# Apply the model to a portfolio - simple MA crossover
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+risk_status <- scores[,c(28,26,27)]
+risk_status$Value <- 0
+risk_status$Value[score_EMA$Value >= score_MA$Value] <- 1
+
+portfolio <- scores[,c(28,26,27)]
+portfolio$Value <- 100
+for(i in 49:nrow(portfolio)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    portfolio$Value[i] <- portfolio$Value[i-1]
+  }
+}
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- scores[,c(28,26,27)]
+
+QQQ_portfolio$Value <- 100
+for(i in 49:nrow(QQQ_portfolio)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+QQQ_portfolio$Label <- "QQQ Portfolio"
+
+# Rebind everything
+price_data <- price_data[,-2]
+
+risk_signal <- score_MA
+risk_signal$Value <- 0
+risk_signal$Value[which(risk_status$Value == 0)] <- 300
+price_data <- rbind(price_data, score_EMA[-(1:49),],portfolio[-(1:49),],QQQ_portfolio[-(1:49),],score_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+
+
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(QQQ_portfolio[-(1:49),], portfolio[-(1:49),], risk_signal[-(1:49),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()+ggtitle("RandomForest Model - Technical Variables vs. Change VXN - 10 days risk off if predict positive change VXN 5 days out)")
+
+
+
+```
+```{r}
+# Comparing the sharpe ratios and returns
+sharpe_ratios <- data.frame(as.matrix(0,2,2))
+sharpe_ratios$as.matrix.0..2..2.[1] <- mean(Delt(portfolio$Value)[-1])/sd(Delt(portfolio$Value)[-1])
+sharpe_ratios$as.matrix.0..2..3.[1] <- 
+mean(Delt(QQQ_portfolio$Value)[-1])/sd(Delt(QQQ_portfolio$Value)[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+# Actual Sharpe Calc:
+library(PerformanceAnalytics)
+portfolio_returns <- data.frame(Delt(portfolio$Value)[-1])
+portfolio_returns_xts <- xts(portfolio_returns, portfolio$Date[-1])
+SharpeRatio.annualized(portfolio_returns_xts)
+
+QQQ_returns <- data.frame(Delt(QQQ_portfolio$Value)[-1])
+QQQ_returns_xts <- xts(QQQ_returns, QQQ_portfolio$Date[-1])
+SharpeRatio.annualized(QQQ_returns_xts)
+```
+
+```{r, warning=FALSE, message=FALSE} 
+###############################################
+# Now we try to improve the buy signal...strategy is to use VXX MA crossover for buying.
+#################################################
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+price_data <- price_data[,-2]
+
+# VXN EMA
+VXN_EMA <- as.data.frame(matrix(nrow = length(which(price_data$Label == "^VXN")) ,ncol = 3)) # removing the first row because VXX starts on 1/25/2018
+colnames(VXN_EMA) <- c("Value", "Date", "Label")
+VXN_EMA$Value <- EMA(price_data$Value[which(price_data$Label == "^VXN")], n = 3)
+VXN_EMA$Label <- "VXN 10 EMA"
+VXN_EMA$Date <- price_data$Date[which(price_data$Label == "^VXN")]
+
+# adding an MA for the crossover
+VXN_MA <- as.data.frame(matrix(nrow = 
+length(which(price_data$Label == "^VXN")),ncol = 3)) # removing the first row because VXX starts on 1/25/2018
+colnames(VXN_MA) <- c("Value", "Date", "Label")
+VXN_MA$Value <- SMA(price_data$Value[which(price_data$Label == "^VXN")], n = 5)
+VXN_MA$Label <- "VXN 20 EMA"
+VXN_MA$Date <- price_data$Date[which(price_data$Label == "^VXN")]
+
+price_data <- rbind(price_data, score_EMA[-(1:20),],score_MA[-(1:50),],VXN_EMA[-(1:10),],VXN_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+```
+```{r, warning=FALSE, message=FALSE}
+# Now we set up the portfolio again
+
+# Make sure both score and vix have matching dates and lengths
+mylist <- c()
+for (i in 1:nrow(VXN_EMA)){
+  if (sum(VXN_EMA$Date[i] == score_EMA$Date) == 0){
+    mylist <- c(mylist, i)
+  }
+}
+
+if (length(mylist) > 0) {
+  VXN_EMA <- VXN_EMA[-mylist,]
+}
+
+mylist <- c()
+for (i in 1:nrow(score_EMA)){
+  if (sum(score_EMA$Date[i] == VXN_EMA$Date) == 0){
+    mylist <- c(mylist, i)
+  }
+}
+
+
+if (length(mylist) > 0) {
+  score_EMA <- score_EMA[-mylist,]
+}
+
+mylist <- c()
+for (i in 1:nrow(VXN_MA)){
+  if (sum(VXN_MA$Date[i] == score_MA$Date) == 0){
+    mylist <- c(mylist, i)
+  }
+}
+
+
+if (length(mylist) > 0) {
+ VXN_MA <- VXN_MA[-mylist,]
+}
+
+
+mylist <- c()
+for (i in 1:nrow(score_MA)){
+  if (sum(score_MA$Date[i] == VXN_MA$Date) == 0){
+    mylist <- c(mylist, i)
+  }
+}
+
+if (length(mylist) > 0) {
+ score_MA <- score_MA[-mylist,]
+}
+
+
+mylist <- c()
+for (i in 1:nrow(price_data)){
+  if (sum(price_data$Date[i] == score_MA$Date) == 0){
+    mylist <- c(mylist, i)
+  }
+}
+
+
+if (length(mylist) > 0) {
+ price_data <- price_data[-mylist,]
+}
+
+
+risk_status <- VXN_EMA
+risk_status$Value <- 0
+
+for(i in 119:nrow(risk_status)){
+  if (score_EMA$Value[i] < score_MA$Value[i]){
+    if (VXN_EMA$Value[i] < VXN_MA$Value[i]){
+      risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+  } else {
+    if (score_EMA$Value[i] > score_MA$Value[i]){
+       risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+   
+  }
+}
+
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+mylist <- c()
+# Build the portfolio
+for (i in 1:nrow(price_data)){
+  if (sum(price_data$Date[i] == score_MA$Date) == 0){
+    mylist <- c(mylist, i)
+  }
+}
+price_data <- price_data[-mylist,]
+portfolio <- VXN_EMA
+portfolio$Value <- 100
+
+
+for(i in 130:nrow(portfolio)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    if (score_EMA$Value[i] < score_MA$Value[i]){ # remove if no short exposure
+       portfolio$Value[i] <- portfolio$Value[i-1] #* (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    } else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    }
+   
+  }
+}
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- VXN_EMA
+
+QQQ_portfolio$Value <- 100
+for(i in 130:nrow(QQQ_portfolio)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+QQQ_portfolio$Label <- "QQQ Portfolio"
+
+
+# Rebind everything
+price_data <- price_data[,-2]
+
+risk_signal <- score_MA
+risk_signal$Value <- 0
+risk_signal$Value[which(risk_status$Value == 0)] <- 300
+risk_signal$Label <- "Risk Signal"
+
+####### Save for future use
+Macro_score_model <- risk_signal
+Macro_score_model$Value[which(Macro_score_model$Value == 0)] <- 0
+Macro_score_model$Value[which(Macro_score_model$Value == 300)] <- 1
+Macro_score_model$Label <- "Macro Score Model"
+####### Save for future use
+
+
+price_data <- rbind(price_data,portfolio[-(1:49),],QQQ_portfolio[-(1:49),],score_EMA[-(1:20),],score_MA[-(1:50),],VXN_EMA[-(1:19),],VXN_MA[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(QQQ_portfolio[-(1:49),], portfolio[-(1:49),],risk_signal[-(1:49),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()+ggtitle("Macro Scoring Model with VXN EMA Crossover Risk On - 20 and 50 EMA")
+
+
+```
+```{r}
+# Evaluate sharpe
+sharpe_ratios <- data.frame(matrix(0,2,2))
+sharpe_ratios$X1[1] <- mean(Delt(portfolio$Value)[-1])/sd(Delt(portfolio$Value)[-1])
+sharpe_ratios$X2[1] <- mean(Delt(QQQ_portfolio$Value)[-1])/sd(Delt(QQQ_portfolio$Value)[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+# Actual Sharpe Calc:
+portfolio_returns <- data.frame(Delt(portfolio$Value)[-1])
+portfolio_returns_xts <- xts(portfolio_returns, portfolio$Date[-1])
+SharpeRatio.annualized(portfolio_returns_xts)
+
+QQQ_returns <- data.frame(Delt(QQQ_portfolio$Value)[-1])
+QQQ_returns_xts <- xts(QQQ_returns, QQQ_portfolio$Date[-1])
+SharpeRatio.annualized(QQQ_returns_xts)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+# Trying a smaller samples only
+
+portfolio <- VXN_EMA
+portfolio$Value <- 100
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+for (i in 1:nrow(price_data)){
+  if (sum(price_data$Date[i] == score_MA$Date) == 0){
+    mylist <- c(mylist, i)
+  }
+}
+price_data <- price_data[-mylist,]
+
+################
+##### Date from which you want the model to start
+########"
+start_date = "2018-11-13" # can't be a weekend/market holiday!!
+end_date = "2022-03-23" # can't be a market/holiday!!
+
+for(i in which(portfolio$Date == start_date):which(portfolio$Date == end_date)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    #if (score_EMA$Value[i] < score_MA$Value[i]){ # remove if no short exposure
+    #   portfolio$Value[i] <- portfolio$Value[i-1] * (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    #} else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    #}
+   
+  }
+}
+
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- VXN_EMA
+QQQ_portfolio$Value <- 100
+
+for(i in which(portfolio$Date == start_date):which(portfolio$Date == end_date)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+
+
+QQQ_portfolio$Label <- "QQQ Portfolio"
+# Rebind everything
+price_data <- price_data[which(price_data$Label == "^VXN"),]
+price_data <- price_data[,-2]
+
+price_data <- rbind(portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],QQQ_portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_EMA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_MA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],VXN_EMA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],VXN_MA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],price_data[which(portfolio$Date == start_date):which(portfolio$Date == end_date),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(QQQ_portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),], portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+```
+```{r}
+# Compare the sharpe
+sharpe_ratios <- data.frame(matrix(0,2,2))
+sharpe_ratios$X1[1] <- mean(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])/sd(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+sharpe_ratios$X2[1] <- mean(Delt(QQQ_portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])/sd(Delt(QQQ_portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+colnames(sharpe_ratios) <- c("Portfolio Daily Sharpe", "QQQ Daily Sharpe")
+
+sharpe_ratios_annualized <- sharpe_ratios *sqrt(252)
+colnames(sharpe_ratios_annualized) <- c("Portfolio Sharpe Annualized", "QQQ Sharpe Annualized")
+sharpe_ratios_annualized[1,]
+
+# Actual Sharpe Calc:
+portfolio_returns <- data.frame(Delt(portfolio$Value[which(portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+portfolio_returns_xts <- xts(portfolio_returns, portfolio$Date[which(portfolio$Date == (as.Date(start_date)+1)):which(portfolio$Date == end_date)])
+SharpeRatio.annualized(portfolio_returns_xts)
+
+QQQ_portfolio_returns <- data.frame(Delt(QQQ_portfolio$Value[which(QQQ_portfolio$Date == start_date):which(portfolio$Date == end_date)])[-1])
+QQQ_portfolio_returns_xts <- xts(QQQ_portfolio_returns, QQQ_portfolio$Date[which(QQQ_portfolio$Date == (as.Date(start_date)+1)):which(portfolio$Date == end_date)])
+SharpeRatio.annualized(QQQ_portfolio_returns_xts)
+```
+
+```{r}
+########################
+# Another approach...rather than MA crossover we use MA of the rate of change
+########################
+score_change <- scores[2:nrow(scores),27:29]
+score_change$Value <- Delt(score_EMA$Value)
+score_change$Value <- EMA(score_change$Value, n = 20)
+
+score_change_slow <- scores[2:nrow(scores),27:29]
+score_change_slow$Value <- EMA(score_change$Value, n = 50)
+
+
+
+# Now we set up the portfolio again
+risk_status <- scores[2:nrow(scores),27:29]
+risk_status$Value <- 0
+
+
+for(i in 130:nrow(risk_status)){
+    if (score_change_slow$Value[i] > 0){
+      risk_status$Value[i] <- 1
+    } else {
+      risk_status$Value[i] <- 0
+    }
+}
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = first.date,
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data = data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+# Build the portfolio
+# Smooth score with an EMA
+score_EMA <- scores[,c(29,27,28)]
+score_EMA$Value <- EMA(scores$Value, n = 20)
+score_EMA$Label <- "ScoreEMA"
+
+
+# adding an MA for the crossover
+score_MA <- scores[,c(29,27,28)]
+score_MA$Value <- EMA(scores$Value, n = 50)
+score_MA$Label <- "Score50MA"
+score_EMA2 <- score_EMA[2:nrow(score_EMA),]
+score_MA2 <- score_MA[2:nrow(score_MA),]
+
+portfolio <- scores[2:nrow(scores)-1,27:29]
+portfolio$Value <- 100
+
+
+for(i in 130:nrow(portfolio)){
+  if (risk_status$Value[i-1] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    print(i)
+    if (score_EMA2$Value[i] < score_MA2$Value[i]){ # remove if no short exposure
+       portfolio$Value[i] <- portfolio$Value[i-1] #* (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    } else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    }
+   
+  }
+}
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- scores[2:nrow(scores),27:29]
+
+QQQ_portfolio$Value <- 100
+for(i in 49:nrow(QQQ_portfolio)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+QQQ_portfolio$Label <- "QQQ Portfolio"
+
+# Rebind everything
+price_data <- price_data[,-2]
+price_data <- rbind(price_data,portfolio[-(1:49),],QQQ_portfolio[-(1:49),],score_EMA[-(1:20),],score_MA[-(1:50),],VXN_EMA[-(1:19),],VXN_MA[-(1:49),], score_change[-(1:49),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(QQQ_portfolio[-(1:49),], portfolio[-(1:49),])
+
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+#score_change <- scores[,14:16]
+#score_change$Value <- Delt(scores$Value)
+#score_change <- na.omit(score_change)
+
+
+
+```
+
+# One year basis
+# Trying 2021 only=
+portfolio <- scores[-1,14:16]
+portfolio$Value <- 100
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2001-02-01",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+
+
+for(i in which(portfolio$Date == start_date):which(portfolio$Date == end_date)){
+  if (risk_status$Value[i] == 1){
+    portfolio$Value[i] <- portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+  } else {
+    if (score_EMA$Value[i] < score_MA$Value[i]){ # remove if no short exposure
+       portfolio$Value[i] <- portfolio$Value[i-1] * (1-(.25)*price_data$`Daily Return`[i]) 
+       #### If you want short exposure (-25%) add * (1-(.25)*price_data$`Daily Return`[i])
+    } else {
+      portfolio$Value[i] <- portfolio$Value[i-1]
+    }
+   
+  }
+}
+
+portfolio$Label <- "Portfolio"
+
+# Set up QQQ portfolio
+QQQ_portfolio <- scores[-1,14:16]
+
+QQQ_portfolio$Value <- 100
+
+for(i in which(portfolio$Date == start_date):which(portfolio$Date == end_date)){
+    QQQ_portfolio$Value[i] <- QQQ_portfolio$Value[i-1] * (1+price_data$`Daily Return`[i])
+}
+
+QQQ_portfolio$Label <- "QQQ Portfolio"
+# Rebind everything
+score_change$Value <- score_change$Value *100
+score_change_slow$Value <- score_change_slow$Value *100
+
+price_data <- price_data[,-2]
+price_data <- rbind(score_change_slow[which(portfolio$Date == start_date):which(portfolio$Date == end_date),], portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],QQQ_portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_EMA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_MA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],VXN_EMA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],VXN_MA[which(portfolio$Date == start_date):which(portfolio$Date == end_date),],score_change[which(portfolio$Date == start_date):which(portfolio$Date == end_date),]) # binding score, date, and label and removing first data point to match dates
+ggplot(price_data, aes(x = price_data$Date, y = price_data$Value, color = price_data$Label, group = price_data$Label))+geom_line()
+
+port_comp <- rbind(QQQ_portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),], portfolio[which(portfolio$Date == start_date):which(portfolio$Date == end_date),])
+ggplot(port_comp, aes(x = port_comp$Date, y = port_comp$Value, color = port_comp$Label, group = port_comp$Label))+geom_line()
+
+
+```{r}
+# Machine Learning Approach
+# use scores$value to try to predict VXX returns 
+
+# Re-pull QQQ and VXX Data if needed
+tickers <- c("QQQ", "^VXN")
+l.out <- BatchGetSymbols(tickers = tickers,
+first.date = "2001-02-01",
+last.date = last.date, do.cache=FALSE, be.quiet = TRUE)
+
+price_data <- data.frame(l.out$df.tickers$price.adjusted,l.out$df.tickers$ret.adjusted.prices, l.out$df.tickers$ref.date, l.out$df.tickers$ticker)
+colnames(price_data) <- c("Value", "Daily Return", "Date", "Label")
+
+View(price_data$`Daily Return`[which(price_data$Label == "^VXN")]) # these are the VXX returns
+# you can try linear, lasso, and random forest
+# once you have that 
+
+
+
+
+```
+
+
